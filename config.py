@@ -1,9 +1,19 @@
-BOT_TOKEN=PUT_YOUR_NEW_BOT_TOKEN_HERE
-ADMIN_ID=511314867
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/master_bot
-CLIENT_ORDER_COOLDOWN=30
-MASTER_OFFER_COOLDOWN=15
-MAX_ACTIVE_CLIENT_ORDERS=3
-MAX_ACTIVE_MASTER_ORDERS=3
-ONLINE_TIMEOUT=300
-PAGE_SIZE=5
+import os
+from dataclasses import dataclass
+
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
+
+@dataclass
+class Settings:
+    bot_token: str = os.getenv("BOT_TOKEN", "")
+    admin_id: int = int(os.getenv("ADMIN_ID", "0"))
+    database_url: str = os.getenv("DATABASE_URL", "")
+    fsm_storage: str = os.getenv("FSM_STORAGE", "memory")
+    auto_apply_schema: bool = os.getenv("AUTO_APPLY_SCHEMA", "false").lower() == "true"
+
+
+settings = Settings()
