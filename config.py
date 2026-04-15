@@ -14,6 +14,7 @@ class Settings:
     database_url: str = os.getenv("DATABASE_URL", "")
     fsm_storage: str = os.getenv("FSM_STORAGE", "memory")
     auto_apply_schema: bool = os.getenv("AUTO_APPLY_SCHEMA", "false").lower() == "true"
-
+    
+    client_order_cooldown: int = int(os.getenv("CLIENT_ORDER_COOLDOWN", "60"))
 
 settings = Settings()
