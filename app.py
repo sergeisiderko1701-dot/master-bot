@@ -25,6 +25,7 @@ async def main():
     await init_db(settings.database_url)
 
     bot = Bot(token=settings.bot_token, parse_mode="HTML")
+    await bot.delete_webhook(drop_pending_updates=True)
     dp = Dispatcher(bot, storage=MemoryStorage())
 
     client.register(dp)
