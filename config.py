@@ -17,5 +17,6 @@ class Settings:
     
     client_order_cooldown: int = int(os.getenv("CLIENT_ORDER_COOLDOWN", "60"))
     max_active_client_orders: int = int(os.getenv("MAX_ACTIVE_CLIENT_ORDERS", "3"))
+    page_size: int = int(os.getenv("PAGE_SIZE", "5"))
     
 settings = Settings()
