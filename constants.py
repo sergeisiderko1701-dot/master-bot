@@ -25,3 +25,11 @@ STATUS_TEXT = {
     "expired": "Неактивна",
     "dispute": "Спір",
 }
+
+
+def category_label(value: str) -> str:
+    return CATEGORY_VALUE_TO_LABEL.get(value, value)
+
+
+def status_label(status: str) -> str:
+    return STATUS_TEXT.get(status, status)
