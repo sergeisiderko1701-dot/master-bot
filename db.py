@@ -136,6 +136,14 @@ async def init_db(database_url: str):
         );
         """)
 
-
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_cooldowns (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            action_key TEXT NOT NULL,
+            last_at BIGINT NOT NULL,
+            UNIQUE (user_id, action_key)
+        );
+        """)
 def get_pool():
     return _pool
