@@ -10,7 +10,6 @@ from db import init_db
 import admin
 import chat
 import client
-import common
 import master
 import misc
 import offers
@@ -28,7 +27,6 @@ async def main():
     bot = Bot(token=settings.bot_token, parse_mode="HTML")
     dp = Dispatcher(bot, storage=MemoryStorage())
 
-    common.register(dp)
     client.register(dp)
     master.register(dp)
     offers.register(dp)
