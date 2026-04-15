@@ -16,5 +16,6 @@ class Settings:
     auto_apply_schema: bool = os.getenv("AUTO_APPLY_SCHEMA", "false").lower() == "true"
     
     client_order_cooldown: int = int(os.getenv("CLIENT_ORDER_COOLDOWN", "60"))
-
+    max_active_client_orders: int = int(os.getenv("MAX_ACTIVE_CLIENT_ORDERS", "3"))
+    
 settings = Settings()
