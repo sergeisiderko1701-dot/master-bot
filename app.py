@@ -4,7 +4,6 @@ import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.utils.exceptions import TerminatedByOtherGetUpdates
 
 from config import settings
 from db import init_db
@@ -23,21 +22,8 @@ logging.basicConfig(
 )
 
 
-async def start_bot(dp):
-    while True:
-        try:
-            await dp.start_polling()
-        except TerminatedByOtherGetUpdates:
-            logging.warning("Another bot instance is still running. Waiting 5 seconds...")
-            await asyncio.sleep(5)
-        except Exception as e:
-            logging.exception(f"Unexpected polling error: {e}")
-            await asyncio.sleep(5)
-
-
 async def main():
     logging.info(f"PID: {os.getpid()}")
-    logging.info(f"Bot token prefix: {settings.bot_token[:10]}")
 
     await init_db(settings.database_url)
 
@@ -54,12 +40,10 @@ async def main():
     misc.register(dp)
 
     logging.info("Bot starting...")
-
     try:
-        await start_bot(dp)
+        await dp.start_polling()
     finally:
         await bot.session.close()
-        logging.info("Bot stopped")
 
 
 if __name__ == "__main__":
