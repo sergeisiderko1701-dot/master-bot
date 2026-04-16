@@ -2,10 +2,10 @@ import asyncio
 import logging
 import os
 import hashlib
+import asyncpg
 
 from aiogram import Bot, Dispatcher
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.utils.exceptions import TerminatedByOtherGetUpdates
 
 from config import settings
 from db import init_db
@@ -23,6 +23,8 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
+LOCK_KEY = 987654321
+
 
 async def main():
     token = settings.bot_token.strip()
@@ -33,32 +35,51 @@ async def main():
 
     await init_db(settings.database_url)
 
+    lock_conn = await asyncpg.connect(settings.database_url)
+    row = await lock_conn.fetchrow(
+        "SELECT pg_try_advisory_lock($1) AS locked",
+        LOCK_KEY
+    )
+
+    if not row or not row["locked"]:
+        logging.warning("Another instance already owns polling lock. Exiting.")
+        await lock_conn.close()
+        return
+
     bot = Bot(token=token, parse_mode="HTML")
 
-    me = await bot.get_me()
-    logging.info(f"Running as bot: @{me.username} (id={me.id})")
-
-    await bot.delete_webhook(drop_pending_updates=True)
-
-    dp = Dispatcher(bot, storage=MemoryStorage())
-
-    client.register(dp)
-    master.register(dp)
-    offers.register(dp)
-    chat.register(dp)
-    admin.register(dp)
-    misc.register(dp)
-
-    logging.info("Bot starting...")
-    logging.info("Start polling.")
-
     try:
+        me = await bot.get_me()
+        logging.info(f"Running as bot: @{me.username} (id={me.id})")
+
+        await bot.delete_webhook(drop_pending_updates=True)
+
+        dp = Dispatcher(bot, storage=MemoryStorage())
+
+        client.register(dp)
+        master.register(dp)
+        offers.register(dp)
+        chat.register(dp)
+        admin.register(dp)
+        misc.register(dp)
+
+        logging.info("Bot starting...")
+        logging.info("Start polling.")
+
         await dp.start_polling()
-    except TerminatedByOtherGetUpdates:
-        logging.exception("Another getUpdates client is using this same token")
-        raise
+
     finally:
-        await bot.session.close()
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+
+        try:
+            await lock_conn.execute("SELECT pg_advisory_unlock($1)", LOCK_KEY)
+            await lock_conn.close()
+        except Exception:
+            pass
+
         logging.info("Bot session closed")
 
 
