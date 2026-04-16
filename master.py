@@ -1,167 +1,271 @@
 from aiogram import types
 from aiogram.dispatcher import FSMContext
-from aiogram.dispatcher.filters import Text
 
 from config import settings
-from constants import CATEGORY_LABEL_TO_VALUE, category_label
-from keyboards import back_menu_kb, categories_kb, client_actions_kb, main_menu_kb, offer_select_inline
+from constants import category_label
+from keyboards import (
+    back_menu_kb,
+    edit_profile_inline_kb,
+    main_menu_kb,
+    master_categories_inline_kb,
+    master_menu_kb,
+)
 from repositories import (
     approved_master_row,
-    client_active_orders_count,
-    create_order,
-    fetch,
+    create_or_update_master,
     fetchrow,
-    get_cooldown,
-    get_order_row,
-    list_client_orders,
-    list_order_offers,
+    list_active_orders_for_master,
+    list_new_orders_for_master,
     master_any_row,
-    set_cooldown,
     touch_master_presence,
+    update_master_profile,
 )
-from services import notify_admin_about_order, notify_masters_about_order, send_master_card, send_order_card
-from states import ClientCreateOrder
-from utils import is_admin, normalize_text, now_ts
-from ui_texts import ask_district_text, ask_media_text, ask_problem_text, choose_category_text, client_actions_text, order_created_text, offer_card_text
+from services import send_master_card, send_order_card
+from states import MasterRegistration, ProfileEdit
+from utils import is_admin, normalize_text
+from ui_texts import ask_district_text
+
+
+PROFILE_FIELD_MAP = {
+    "name": "name",
+    "district": "district",
+    "phone": "phone",
+    "description": "description",
+    "experience": "experience",
+    "photo": "photo",
+}
 
 
 def register(dp):
-    @dp.message_handler(lambda m: m.text == "👤 Клієнт", state="*")
-    async def client_menu(message: types.Message, state: FSMContext):
+    @dp.message_handler(lambda m: m.text in ["🔧 Майстер", "🔧 Я майстер"], state="*")
+    async def master_entry(message: types.Message, state: FSMContext):
         await state.finish()
-        await message.answer(choose_category_text(), reply_markup=categories_kb())
+        master = await master_any_row(message.from_user.id)
 
-    @dp.message_handler(lambda m: m.text in CATEGORY_LABEL_TO_VALUE.keys(), state="*")
-    async def choose_category(message: types.Message, state: FSMContext):
-        category = CATEGORY_LABEL_TO_VALUE[message.text]
-        await state.update_data(client_category=category)
-        await message.answer(client_actions_text(category), reply_markup=client_actions_kb())
-
-    @dp.message_handler(lambda m: m.text == "📨 Створити заявку", state="*")
-    async def create_order_start(message: types.Message, state: FSMContext):
-        data = await state.get_data()
-        category = data.get("client_category")
-        if not category:
-            await message.answer("Спочатку оберіть категорію.", reply_markup=categories_kb())
+        if master and master["status"] == "approved":
+            await touch_master_presence(message.from_user.id)
+            await show_master_profile(message, master)
             return
 
-        prev = await get_cooldown(message.from_user.id, "client_create_order")
-        current = now_ts()
-        if current - prev < settings.client_order_cooldown:
+        if master and master["status"] == "pending":
+            await message.answer("Ваша заявка вже на модерації.", reply_markup=back_menu_kb())
+            return
+
+        if master and master["status"] == "blocked":
             await message.answer(
-                f"Зачекайте {settings.client_order_cooldown - (current - prev)} сек перед новою заявкою.",
-                reply_markup=client_actions_kb(),
+                "Ваш профіль майстра заблокований. Зверніться в підтримку.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id))
             )
             return
 
-        if await client_active_orders_count(message.from_user.id) >= settings.max_active_client_orders:
-            await message.answer("У вас вже занадто багато активних заявок.", reply_markup=client_actions_kb())
-            return
+        await MasterRegistration.name.set()
+        await message.answer(
+            "👤 <b>Реєстрація майстра</b>\n\nВведіть ваше ім'я:",
+            reply_markup=back_menu_kb()
+        )
 
-        await ClientCreateOrder.district.set()
-        await message.answer(ask_district_text(), reply_markup=back_menu_kb())
+    async def show_master_profile(message: types.Message, master_row):
+        text = (
+            f"👤 Ваш профіль майстра\n\n"
+            f"👤 Ім'я: {master_row['name']}\n"
+            f"🔧 Категорія: {category_label(master_row['category'])}\n"
+            f"📍 Район: {master_row['district'] or '-'}\n"
+            f"📞 Телефон: {master_row['phone']}\n"
+            f"🧾 Про себе: {master_row['description'] or '-'}\n"
+            f"🛠 Досвід: {master_row['experience'] or '-'}\n"
+            f"⭐ Рейтинг: {float(master_row['rating']):.2f}\n"
+            f"💬 Відгуків: {master_row['reviews_count']}\n"
+            f"🟢 Статус: {master_row['availability']}"
+        )
 
-    @dp.message_handler(state=ClientCreateOrder.district)
-    async def client_order_district(message: types.Message, state: FSMContext):
-        district = normalize_text(message.text, 255)
-        await state.update_data(district=district)
-        await ClientCreateOrder.next()
-        await message.answer(ask_problem_text(), reply_markup=back_menu_kb())
-
-    @dp.message_handler(state=ClientCreateOrder.problem)
-    async def client_order_problem(message: types.Message, state: FSMContext):
-        problem = normalize_text(message.text, 1500) or "Без тексту"
-        await state.update_data(problem=problem)
-        await ClientCreateOrder.next()
-        await message.answer(ask_media_text(), reply_markup=back_menu_kb())
-
-    @dp.message_handler(content_types=types.ContentTypes.ANY, state=ClientCreateOrder.media)
-    async def client_order_media(message: types.Message, state: FSMContext):
-        data = await state.get_data()
-        media_type = None
-        media_file_id = None
-        text = (message.text or "").strip().lower()
-
-        if message.photo:
-            media_type = "photo"
-            media_file_id = message.photo[-1].file_id
-        elif message.video:
-            media_type = "video"
-            media_file_id = message.video.file_id
-        elif text == "пропустити":
-            pass
+        if master_row["photo"]:
+            try:
+                await dp.bot.send_photo(message.chat.id, master_row["photo"], caption=text)
+            except Exception:
+                await message.answer(text)
         else:
-            await message.answer("Надішліть фото, відео або напишіть 'пропустити'.", reply_markup=back_menu_kb())
+            await message.answer(text)
+
+        await message.answer("👇 <b>Меню майстра</b>", reply_markup=master_menu_kb())
+
+    @dp.message_handler(state=MasterRegistration.name)
+    async def reg_name(message: types.Message, state: FSMContext):
+        await state.update_data(name=normalize_text(message.text, 120))
+        await MasterRegistration.next()
+        await message.answer("🔧 Оберіть спеціальність кнопкою:", reply_markup=back_menu_kb())
+        await message.answer("Категорії:", reply_markup=master_categories_inline_kb())
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("master_cat_"), state=MasterRegistration.category)
+    async def reg_category(call: types.CallbackQuery, state: FSMContext):
+        await state.update_data(category=call.data.split("master_cat_", 1)[1])
+        await MasterRegistration.next()
+        await call.message.answer(ask_district_text(), reply_markup=back_menu_kb())
+        await call.answer()
+
+    @dp.message_handler(state=MasterRegistration.district)
+    async def reg_district(message: types.Message, state: FSMContext):
+        await state.update_data(district=normalize_text(message.text, 255))
+        await MasterRegistration.next()
+        await message.answer(
+            "🧾 <b>Коротко про себе</b>\n\nНапишіть кілька речень про ваш досвід і спеціалізацію.",
+            reply_markup=back_menu_kb()
+        )
+
+    @dp.message_handler(state=MasterRegistration.description)
+    async def reg_description(message: types.Message, state: FSMContext):
+        await state.update_data(description=normalize_text(message.text, 1000))
+        await MasterRegistration.next()
+        await message.answer(
+            "🛠 <b>Досвід роботи</b>\n\nНапишіть, з чим саме допомагаєте клієнтам.",
+            reply_markup=back_menu_kb()
+        )
+
+    @dp.message_handler(state=MasterRegistration.experience)
+    async def reg_experience(message: types.Message, state: FSMContext):
+        await state.update_data(experience=normalize_text(message.text, 1000))
+        await MasterRegistration.next()
+        await message.answer(
+            "📞 <b>Контактний телефон</b>\n\nВведіть номер у зручному форматі.",
+            reply_markup=back_menu_kb()
+        )
+
+    @dp.message_handler(state=MasterRegistration.phone)
+    async def reg_phone(message: types.Message, state: FSMContext):
+        await state.update_data(phone=normalize_text(message.text, 50))
+        await MasterRegistration.next()
+        await message.answer(
+            "📸 <b>Фото профілю</b>\n\nНадішліть фото або напишіть <b>пропустити</b>.",
+            reply_markup=back_menu_kb()
+        )
+
+    @dp.message_handler(content_types=types.ContentTypes.ANY, state=MasterRegistration.photo)
+    async def reg_photo(message: types.Message, state: FSMContext):
+        text = (message.text or "").strip().lower()
+        photo = message.photo[-1].file_id if message.photo else None
+
+        if not photo and text != "пропустити":
+            await message.answer("Надішліть фото або напишіть 'пропустити'.", reply_markup=back_menu_kb())
             return
 
-        order_id = await create_order(
-            message.from_user.id,
-            data["client_category"],
-            data.get("district", ""),
-            data.get("problem", ""),
-            media_type,
-            media_file_id,
-        )
-        await set_cooldown(message.from_user.id, "client_create_order", now_ts())
-        order_row = await get_order_row(order_id)
-        masters = await fetch("SELECT user_id FROM masters WHERE status='approved' AND category=$1 AND availability='online'", data["client_category"])
-        await notify_admin_about_order(dp.bot, settings.admin_id, order_row)
-        await notify_masters_about_order(dp.bot, order_row, masters)
-        await state.finish()
-        await message.answer(order_created_text(), reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)))
-
-    @dp.message_handler(lambda m: m.text == "👷 Переглянути майстрів", state="*")
-    async def view_masters(message: types.Message, state: FSMContext):
         data = await state.get_data()
-        category = data.get("client_category")
-        if not category:
-            await message.answer("Спочатку оберіть категорію.", reply_markup=categories_kb())
-            return
+        data["user_id"] = message.from_user.id
+        data["photo"] = photo
+        await create_or_update_master(data)
 
-        rows = await fetch(
-            "SELECT * FROM masters WHERE status='approved' AND category=$1 ORDER BY rating DESC, reviews_count DESC, name ASC",
-            category,
+        master_row = await fetchrow("SELECT * FROM masters WHERE user_id=$1", message.from_user.id)
+        await send_master_card(dp.bot, settings.admin_id, master_row, title="📝 Нова заявка майстра")
+
+        await state.finish()
+        await message.answer(
+            "⏳ <b>Заявку надіслано</b>\n\nПісля перевірки адміністратор активує ваш профіль.",
+            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id))
         )
-        if not rows:
-            await message.answer("У цій категорії поки немає підтверджених майстрів.", reply_markup=client_actions_kb())
+
+    @dp.message_handler(lambda m: m.text == "👤 Мій профіль", state="*")
+    async def profile(message: types.Message, state: FSMContext):
+        master = await approved_master_row(message.from_user.id)
+        if not master:
+            await message.answer(
+                "Профіль майстра недоступний.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id))
+            )
+            return
+        await show_master_profile(message, master)
+
+    @dp.message_handler(lambda m: m.text == "✏️ Редагувати профіль", state="*")
+    async def edit_profile(message: types.Message, state: FSMContext):
+        master = await approved_master_row(message.from_user.id)
+        if not master:
+            await message.answer(
+                "Профіль майстра недоступний.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id))
+            )
             return
 
-        await message.answer(f"👷 Майстри в категорії: {category_label(category)}", reply_markup=client_actions_kb())
-        for row in rows:
-            await send_master_card(dp.bot, message.chat.id, row, title="👷 Майстер")
+        await message.answer("Оберіть, що хочете змінити:", reply_markup=back_menu_kb())
+        await message.answer("Поля профілю:", reply_markup=edit_profile_inline_kb())
 
-    @dp.message_handler(lambda m: m.text == "📦 Мої заявки", state="*")
-    async def my_orders(message: types.Message, state: FSMContext):
-        rows = await list_client_orders(message.from_user.id)
-        if not rows:
-            await message.answer("У вас поки немає заявок.", reply_markup=client_actions_kb())
+    @dp.callback_query_handler(lambda c: c.data.startswith("edit_"), state="*")
+    async def edit_profile_field(call: types.CallbackQuery, state: FSMContext):
+        master = await approved_master_row(call.from_user.id)
+        if not master:
+            await call.answer("Профіль недоступний", show_alert=True)
             return
-        await message.answer("📦 Ваші заявки:", reply_markup=client_actions_kb())
-        for row in rows:
-            from keyboards import client_order_actions_inline
-            await send_order_card(dp.bot, message.chat.id, row, title="📄 Ваша заявка", reply_markup=client_order_actions_inline(row["id"], row["status"]))
 
-    @dp.callback_query_handler(lambda c: c.data.startswith("client_offers_"), state="*")
-    async def client_offers(call: types.CallbackQuery, state: FSMContext):
-        order_id = int(call.data.split("_")[-1])
-        order = await fetchrow("SELECT * FROM orders WHERE id=$1 AND user_id=$2", order_id, call.from_user.id)
-        if not order:
-            await call.answer("Вашу заявку не знайдено.", show_alert=True)
-            return
-        offers = await list_order_offers(order_id)
-        if not offers:
-            await call.message.answer("По цій заявці поки немає пропозицій.")
+        field = call.data.replace("edit_", "", 1)
+        if field not in PROFILE_FIELD_MAP:
             await call.answer()
             return
-        await call.message.answer(f"📬 <b>Пропозиції по заявці #{order_id}</b>\n\nОберіть майстра, який підходить найкраще 👇")
-        for offer in offers:
-            text = (
-                f"💼 Пропозиція\n\n"
-                f"👤 Майстер: {offer['name']}\n"
-                f"⭐ {float(offer['rating']):.2f} | відгуків: {offer['reviews_count']}\n"
-                f"💰 Ціна: {offer['price']}\n"
-                f"⏱ Коли зможе: {offer['eta']}\n"
-                f"📝 Коментар: {offer['comment']}"
-            )
-            await call.message.answer(text, reply_markup=offer_select_inline(offer["id"]))
+
+        await state.update_data(edit_field=field)
+        await ProfileEdit.value.set()
+
+        prompt = "Надішліть нове значення:" if field != "photo" else "Надішліть нове фото або напишіть 'пропустити':"
+        await call.message.answer(prompt, reply_markup=back_menu_kb())
         await call.answer()
+
+    @dp.message_handler(content_types=types.ContentTypes.ANY, state=ProfileEdit.value)
+    async def edit_profile_save(message: types.Message, state: FSMContext):
+        data = await state.get_data()
+        field = data["edit_field"]
+
+        if field == "photo":
+            value = message.photo[-1].file_id if message.photo else None
+            if not value and (message.text or "").strip().lower() != "пропустити":
+                await message.answer("Надішліть фото або напишіть 'пропустити'.", reply_markup=back_menu_kb())
+                return
+        else:
+            value = normalize_text(message.text, 1000)
+            if not value:
+                await message.answer("Надішліть текстове значення.", reply_markup=back_menu_kb())
+                return
+
+        await update_master_profile(message.from_user.id, PROFILE_FIELD_MAP[field], value)
+        await state.finish()
+        await message.answer("✅ Профіль оновлено.", reply_markup=master_menu_kb())
+
+    @dp.message_handler(lambda m: m.text == "📦 Нові заявки", state="*")
+    async def new_orders(message: types.Message, state: FSMContext):
+        master = await approved_master_row(message.from_user.id)
+        if not master:
+            await message.answer(
+                "❌ Ви не підтверджений майстер.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id))
+            )
+            return
+
+        rows = await list_new_orders_for_master(master["category"])
+        if not rows:
+            await message.answer("Наразі нових заявок у вашій категорії немає.", reply_markup=master_menu_kb())
+            return
+
+        await message.answer(f"📦 Нові заявки ({category_label(master['category'])}):", reply_markup=master_menu_kb())
+
+        from keyboards import order_card_master_actions
+        for row in rows:
+            await send_order_card(
+                dp.bot,
+                message.chat.id,
+                row,
+                title="📢 Доступна заявка",
+                reply_markup=order_card_master_actions(row["id"])
+            )
+
+    @dp.message_handler(lambda m: m.text == "💬 Активні чати", state="*")
+    async def active_orders(message: types.Message, state: FSMContext):
+        rows = await list_active_orders_for_master(message.from_user.id)
+        if not rows:
+            await message.answer("У вас немає активних заявок.", reply_markup=master_menu_kb())
+            return
+
+        await message.answer("✅ Ваші активні заявки:", reply_markup=master_menu_kb())
+
+        from keyboards import selected_order_master_actions
+        for row in rows:
+            await send_order_card(
+                dp.bot,
+                message.chat.id,
+                row,
+                title="📄 Активна заявка",
+                reply_markup=selected_order_master_actions(row["id"])
+            )
