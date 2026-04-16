@@ -406,3 +406,58 @@ async def admin_stats():
         row = await fetchrow(query)
         data[key] = int(row["c"])
     return data
+
+
+async def create_chat_if_not_exists(order_id: int):
+    chat = await fetchrow("SELECT * FROM chats WHERE order_id=$1", order_id)
+    if chat:
+        return chat
+
+    order = await fetchrow("SELECT * FROM orders WHERE id=$1", order_id)
+    if not order or not order["selected_master_id"]:
+        return None
+
+    ts = now_ts()
+
+    return await fetchrow(
+        '''
+        INSERT INTO chats(order_id, client_user_id, master_user_id, status, created_at, updated_at)
+        VALUES($1, $2, $3, 'active', $4, $4)
+        RETURNING *
+        ''',
+        order_id,
+        order["user_id"],
+        order["selected_master_id"],
+        ts
+    )
+
+
+async def save_chat_message(chat_id: int, sender_role: str, text: str):
+    chat = await fetchrow("SELECT * FROM chats WHERE id=$1", chat_id)
+    if not chat:
+        return None
+
+    ts = now_ts()
+
+    sender_user_id = chat["client_user_id"] if sender_role == "client" else chat["master_user_id"]
+
+    await execute(
+        '''
+        INSERT INTO chat_messages(chat_id, order_id, sender_user_id, sender_role, message_type, text, file_id, created_at)
+        VALUES($1, $2, $3, $4, 'text', $5, NULL, $6)
+        ''',
+        chat_id,
+        chat["order_id"],
+        sender_user_id,
+        sender_role,
+        text,
+        ts
+    )
+
+    await execute(
+        "UPDATE chats SET updated_at=$1 WHERE id=$2",
+        ts,
+        chat_id
+    )
+
+    return True
