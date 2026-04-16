@@ -46,6 +46,8 @@ async def main():
         await lock_conn.close()
         return
 
+    logging.info("Polling lock acquired")
+
     bot = Bot(token=token, parse_mode="HTML")
 
     try:
