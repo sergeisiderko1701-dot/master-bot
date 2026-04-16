@@ -2,12 +2,12 @@ import logging
 from aiogram import Bot
 from keyboards import admin_order_actions_inline, order_card_master_actions
 from repositories import get_master_name, get_chat_for_order
-from ui_texts import master_card_text, order_card_text
+from ui_texts import master_card_text
 
 
 async def send_master_card(bot: Bot, chat_id: int, master_row, title="👷 <b>Картка майстра</b>", reply_markup=None):
     text = master_card_text(master_row, title)
-    if master_row["photo"]:
+    if master_row.get("photo"):
         try:
             await bot.send_photo(chat_id, master_row["photo"], caption=text, reply_markup=reply_markup)
             return
@@ -31,37 +31,18 @@ async def send_order_card(bot, chat_id: int, order_row, title: str = "📄 Ва�
     if media_file_id:
         try:
             if media_type == "photo":
-                await bot.send_photo(
-                    chat_id,
-                    media_file_id,
-                    caption=text,
-                    reply_markup=reply_markup
-                )
+                await bot.send_photo(chat_id, media_file_id, caption=text, reply_markup=reply_markup)
                 return
             elif media_type == "video":
-                await bot.send_video(
-                    chat_id,
-                    media_file_id,
-                    caption=text,
-                    reply_markup=reply_markup
-                )
+                await bot.send_video(chat_id, media_file_id, caption=text, reply_markup=reply_markup)
                 return
             else:
-                await bot.send_photo(
-                    chat_id,
-                    media_file_id,
-                    caption=text,
-                    reply_markup=reply_markup
-                )
+                await bot.send_photo(chat_id, media_file_id, caption=text, reply_markup=reply_markup)
                 return
         except Exception:
             pass
 
-    await bot.send_message(
-        chat_id,
-        text,
-        reply_markup=reply_markup
-    )
+    await bot.send_message(chat_id, text, reply_markup=reply_markup)
 
 
 async def send_admin_order_detail(bot: Bot, chat_id: int, order, offers):
