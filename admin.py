@@ -1,180 +1,325 @@
 from aiogram import types
 from aiogram.dispatcher import FSMContext
-import asyncpg
 
 from config import settings
-from keyboards import back_menu_kb, main_menu_kb, master_menu_kb
+from constants import status_label
+from keyboards import admin_menu_kb, admin_orders_filter_kb, main_menu_kb, pagination_inline, support_reply_inline
 from repositories import (
-    approved_master_row,
-    choose_offer,
-    create_offer,
+    admin_stats,
+    delete_master_by_id,
+    fetch,
     fetchrow,
-    get_cooldown,
+    get_master_by_id,
     get_order_row,
-    master_active_orders_count,
-    set_cooldown,
+    list_admin_masters,
+    list_admin_orders,
+    list_pending_masters,
+    list_order_offers,
+    set_master_status_by_id,
+    set_order_status,
+    close_chat,
 )
-from states import OfferCreate, RatingFlow, ComplaintWrite
+from services import send_admin_order_detail, send_master_card, send_order_card
+from states import SupportReply
 from utils import is_admin, normalize_text, now_ts
 
 
 def register(dp):
-    @dp.callback_query_handler(lambda c: c.data.startswith("offer_start_"), state="*")
-    async def offer_start(call: types.CallbackQuery, state: FSMContext):
-        master = await approved_master_row(call.from_user.id)
-        if not master:
-            await call.answer("Ви не підтверджений майстер", show_alert=True)
+    @dp.message_handler(lambda m: m.text == "👑 Адмін", state="*")
+    async def admin_panel(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
             return
-
-        if await master_active_orders_count(call.from_user.id) >= settings.max_active_master_orders:
-            await call.answer("У вас уже забагато активних заявок", show_alert=True)
-            return
-
-        order_id = int(call.data.split("_")[-1])
-        order = await get_order_row(order_id)
-        if not order or order["category"] != master["category"] or order["status"] not in ["new", "offered"]:
-            await call.answer("Заявка вже недоступна", show_alert=True)
-            return
-
-        prev = await get_cooldown(call.from_user.id, "master_offer")
-        current = now_ts()
-        if current - prev < settings.master_offer_cooldown:
-            await call.answer("Зачекайте перед новим відгуком", show_alert=True)
-            return
-
-        await state.update_data(order_id=order_id)
-        await OfferCreate.price.set()
-        await call.message.answer("💰 <b>Ваш офер</b>\n\nВкажіть вашу ціну.", reply_markup=back_menu_kb())
-        await call.answer()
-
-    @dp.message_handler(state=OfferCreate.price)
-    async def offer_price(message: types.Message, state: FSMContext):
-        await state.update_data(price=normalize_text(message.text, 100))
-        await OfferCreate.next()
-        await message.answer("⏱ <b>Коли зможете взятись?</b>\n\nНапишіть час текстом.", reply_markup=back_menu_kb())
-
-    @dp.message_handler(state=OfferCreate.eta)
-    async def offer_eta(message: types.Message, state: FSMContext):
-        await state.update_data(eta=normalize_text(message.text, 100))
-        await OfferCreate.next()
-        await message.answer("📝 <b>Коментар до оферу</b>\n\nКоротко опишіть, що входить у вашу пропозицію.", reply_markup=back_menu_kb())
-
-    @dp.message_handler(state=OfferCreate.comment)
-    async def offer_comment(message: types.Message, state: FSMContext):
-        data = await state.get_data()
-        order_id = int(data["order_id"])
-        comment = normalize_text(message.text, 1000) or "-"
-        try:
-            await create_offer(order_id, message.from_user.id, data["price"], data["eta"], comment)
-            await set_cooldown(message.from_user.id, "master_offer", now_ts())
-        except asyncpg.UniqueViolationError:
-            await state.finish()
-            await message.answer("❌ Ви вже відгукнулися на цю заявку.", reply_markup=master_menu_kb())
-            return
-
-        order = await get_order_row(order_id)
         await state.finish()
-        await message.answer("✅ <b>Пропозицію надіслано клієнту</b>", reply_markup=master_menu_kb())
+        await message.answer("👑 Адмін панель:", reply_markup=admin_menu_kb())
+
+    @dp.message_handler(lambda m: m.text == "👷 База майстрів", state="*")
+    async def masters_page(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await show_admin_masters_page(message.chat.id, 0)
+
+    @dp.message_handler(lambda m: m.text == "📝 Заявки майстрів", state="*")
+    async def pending_page(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await show_pending_masters_page(message.chat.id, 0)
+
+    @dp.message_handler(lambda m: m.text == "📦 Заявки клієнтів", state="*")
+    async def orders_filter(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await message.answer("Оберіть фільтр заявок:", reply_markup=admin_orders_filter_kb())
+
+    @dp.message_handler(lambda m: m.text == "📊 Статистика", state="*")
+    async def stats(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        data = await admin_stats()
+        text = (
+            f"📊 Статистика\n\n"
+            f"👷 Усього майстрів: {data['masters_total']}\n"
+            f"✅ Підтверджені: {data['masters_approved']}\n"
+            f"📝 На модерації: {data['masters_pending']}\n"
+            f"🚫 Заблоковані: {data['masters_blocked']}\n\n"
+            f"📦 Усього заявок: {data['orders_total']}\n"
+            f"🆕 Нові: {data['orders_new']}\n"
+            f"📬 Є пропозиції: {data['orders_offered']}\n"
+            f"🤝 Обрано майстра: {data['orders_matched']}\n"
+            f"🛠 В роботі: {data['orders_progress']}\n"
+            f"✅ Завершені: {data['orders_done']}\n"
+            f"❌ Скасовані: {data['orders_cancelled']}\n"
+            f"⌛ Прострочені: {data['orders_expired']}"
+        )
+        await message.answer(text, reply_markup=admin_menu_kb())
+
+    async def show_pending_masters_page(chat_id: int, page: int):
+        offset = page * settings.page_size
+        rows, total = await list_pending_masters(settings.page_size, offset)
+        if not rows:
+            await dp.bot.send_message(chat_id, "Немає заявок майстрів на модерацію.", reply_markup=admin_menu_kb())
+            return
+        await dp.bot.send_message(chat_id, f"📝 Заявки майстрів (сторінка {page + 1}):")
+        from keyboards import admin_pending_master_inline
+        for row in rows:
+            await send_master_card(dp.bot, chat_id, row, title="📝 Заявка майстра", reply_markup=admin_pending_master_inline(row["id"]))
+        pag = pagination_inline("page_pending_masters", page, page > 0, offset + settings.page_size < total)
+        if pag:
+            await dp.bot.send_message(chat_id, "Навігація:", reply_markup=pag)
+
+    async def show_admin_masters_page(chat_id: int, page: int):
+        offset = page * settings.page_size
+        rows, total = await list_admin_masters(settings.page_size, offset)
+        if not rows:
+            await dp.bot.send_message(chat_id, "У базі немає майстрів.", reply_markup=admin_menu_kb())
+            return
+        await dp.bot.send_message(chat_id, f"👷 База майстрів (сторінка {page + 1}):")
+        from keyboards import admin_master_card_inline
+        for row in rows:
+            await send_master_card(dp.bot, chat_id, row, title="📄 Майстер", reply_markup=admin_master_card_inline(row["id"], row["status"]))
+        pag = pagination_inline("page_masters", page, page > 0, offset + settings.page_size < total)
+        if pag:
+            await dp.bot.send_message(chat_id, "Навігація:", reply_markup=pag)
+
+    async def show_admin_orders_page(chat_id: int, page: int, status_filter=None):
+        offset = page * settings.page_size
+        rows, total = await list_admin_orders(settings.page_size, offset, status_filter)
+        if not rows:
+            await dp.bot.send_message(chat_id, "Заявок немає.", reply_markup=admin_orders_filter_kb())
+            return
+        title = "📦 Заявки клієнтів"
+        if status_filter:
+            title += f" — {status_label(status_filter)}"
+        title += f" (сторінка {page + 1})"
+        await dp.bot.send_message(chat_id, title)
+        from keyboards import admin_order_actions_inline
+        for row in rows:
+            await send_order_card(dp.bot, chat_id, row, title="📄 Заявка", reply_markup=admin_order_actions_inline(row["id"], row["status"]))
+        prefix = f"page_orders_{status_filter or 'all'}"
+        pag = pagination_inline(prefix, page, page > 0, offset + settings.page_size < total)
+        if pag:
+            await dp.bot.send_message(chat_id, "Навігація:", reply_markup=pag)
+
+    ORDER_FILTERS = {
+        "📋 Усі заявки": None,
+        "🆕 Нові": "new",
+        "📬 Є пропозиції": "offered",
+        "🤝 Обрано майстра": "matched",
+        "🛠 В роботі": "in_progress",
+        "✅ Завершені": "done",
+        "❌ Скасовані": "cancelled",
+        "⌛ Прострочені": "expired",
+    }
+
+    @dp.message_handler(lambda m: m.text in ORDER_FILTERS, state="*")
+    async def filter_orders(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await show_admin_orders_page(message.chat.id, 0, ORDER_FILTERS[message.text])
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_approve_master_"), state="*")
+    async def approve_master(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            await call.answer("Недоступно", show_alert=True)
+            return
+        master_id = int(call.data.split("_")[-1])
+        master = await fetchrow("SELECT * FROM masters WHERE id=$1 AND status='pending'", master_id)
+        if not master:
+            await call.answer("Заявку не знайдено", show_alert=True)
+            return
+        await set_master_status_by_id(master_id, "approved")
         try:
-            await dp.bot.send_message(
-                order["user_id"],
-                f"📬 На вашу заявку #{order_id} надійшла нова пропозиція від майстра.",
-                reply_markup=main_menu_kb(is_admin_user=is_admin(order["user_id"]))
-            )
+            await dp.bot.send_message(master["user_id"], "✅ Вашу заявку схвалено. Ви тепер майстер.")
         except Exception:
             pass
+        await call.message.answer("✅ Майстра підтверджено.")
+        await call.answer()
 
-    @dp.callback_query_handler(lambda c: c.data.startswith("choose_offer_"), state="*")
-    async def choose_offer_handler(call: types.CallbackQuery, state: FSMContext):
-        offer_id = int(call.data.split("_")[-1])
-        offer = await choose_offer(offer_id, call.from_user.id)
-        if not offer:
-            await call.answer("Пропозиція недоступна", show_alert=True)
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_reject_master_"), state="*")
+    async def reject_master(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            await call.answer("Недоступно", show_alert=True)
             return
-        await call.message.answer("🎉 <b>Майстра обрано</b>\n\nТепер можна обговорити деталі в чаті 💬")
+        master_id = int(call.data.split("_")[-1])
+        master = await fetchrow("SELECT * FROM masters WHERE id=$1 AND status='pending'", master_id)
+        if not master:
+            await call.answer("Заявку не знайдено", show_alert=True)
+            return
+        await delete_master_by_id(master_id)
         try:
-            await dp.bot.send_message(offer["master_user_id"], f"🎉 Вас обрали по заявці #{offer['order_id']}.", reply_markup=master_menu_kb())
+            await dp.bot.send_message(master["user_id"], "❌ Вашу заявку майстра відхилено.")
         except Exception:
             pass
+        await call.message.answer("❌ Заявку майстра відхилено.")
         await call.answer()
 
-    @dp.callback_query_handler(lambda c: c.data.startswith("finish_order_"), state="*")
-    async def finish_order(call: types.CallbackQuery, state: FSMContext):
-        from repositories import finish_order as finish_order_repo
-        order_id = int(call.data.split("_")[-1])
-        order = await fetchrow(
-            "SELECT * FROM orders WHERE id=$1 AND selected_master_id=$2 AND status = ANY($3::text[])",
-            order_id, call.from_user.id, ['matched', 'in_progress']
-        )
-        if not order:
-            await call.answer("Заявка недоступна", show_alert=True)
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_block_master_"), state="*")
+    async def block_master(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
             return
-        await finish_order_repo(order_id)
-        await call.message.answer("✅ Заявку завершено.")
-        await state.update_data(rating_order_id=order_id, rating_master_user_id=call.from_user.id)
-        await RatingFlow.value.set()
-        await dp.bot.send_message(order["user_id"], "⭐ Оцініть майстра цифрою від 1 до 5")
-        await call.answer()
-
-    @dp.callback_query_handler(lambda c: c.data.startswith("refuse_order_"), state="*")
-    async def refuse_order(call: types.CallbackQuery, state: FSMContext):
-        from repositories import refuse_order as refuse_order_repo
-        order_id = int(call.data.split("_")[-1])
-        order = await fetchrow(
-            "SELECT * FROM orders WHERE id=$1 AND selected_master_id=$2 AND status = ANY($3::text[])",
-            order_id, call.from_user.id, ['matched', 'in_progress']
-        )
-        if not order:
-            await call.answer("Заявка недоступна", show_alert=True)
+        master_id = int(call.data.split("_")[-1])
+        master = await get_master_by_id(master_id)
+        if not master:
+            await call.answer("Майстра не знайдено", show_alert=True)
             return
-        await refuse_order_repo(order_id)
+        await set_master_status_by_id(master_id, "blocked", "offline")
         try:
-            await dp.bot.send_message(order["user_id"], f"⚠️ Майстер відмовився від заявки #{order_id}.")
+            await dp.bot.send_message(master["user_id"], "🚫 Ваш профіль майстра заблоковано.")
         except Exception:
             pass
-        await call.message.answer("✅ Ви відмовились від заявки.")
+        await call.message.answer("🚫 Майстра заблоковано.")
         await call.answer()
 
-    @dp.callback_query_handler(lambda c: c.data.startswith("client_cancel_"), state="*")
-    async def client_cancel(call: types.CallbackQuery, state: FSMContext):
-        from repositories import cancel_order
-        order_id = int(call.data.split("_")[-1])
-        order = await fetchrow(
-            "SELECT * FROM orders WHERE id=$1 AND user_id=$2 AND status = ANY($3::text[])",
-            order_id, call.from_user.id, ['new', 'offered', 'matched']
-        )
-        if not order:
-            await call.answer("Заявку не можна скасувати", show_alert=True)
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_unblock_master_"), state="*")
+    async def unblock_master(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
             return
-        await cancel_order(order_id)
-        if order["selected_master_id"]:
-            try:
-                await dp.bot.send_message(order["selected_master_id"], f"❌ Клієнт скасував заявку #{order_id}.")
-            except Exception:
-                pass
-        await call.message.answer("✅ Заявку скасовано.")
+        master_id = int(call.data.split("_")[-1])
+        master = await get_master_by_id(master_id)
+        if not master:
+            await call.answer("Майстра не знайдено", show_alert=True)
+            return
+        await set_master_status_by_id(master_id, "approved")
+        try:
+            await dp.bot.send_message(master["user_id"], "✅ Ваш профіль майстра розблоковано.")
+        except Exception:
+            pass
+        await call.message.answer("✅ Майстра розблоковано.")
         await call.answer()
 
-    @dp.callback_query_handler(lambda c: c.data.startswith("complain_master_"), state="*")
-    async def complain_master(call: types.CallbackQuery, state: FSMContext):
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_delete_master_"), state="*")
+    async def delete_master(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            return
+        master_id = int(call.data.split("_")[-1])
+        master = await get_master_by_id(master_id)
+        if not master:
+            await call.answer("Майстра не знайдено", show_alert=True)
+            return
+        await delete_master_by_id(master_id)
+        try:
+            await dp.bot.send_message(master["user_id"], "🗑 Ваш профіль майстра видалено адміністратором.")
+        except Exception:
+            pass
+        await call.message.answer("🗑 Майстра видалено.")
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_order_detail_"), state="*")
+    async def order_detail(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            return
         order_id = int(call.data.split("_")[-1])
         order = await get_order_row(order_id)
-        if not order or order["user_id"] != call.from_user.id or not order["selected_master_id"]:
-            await call.answer("Скарга недоступна", show_alert=True)
+        if not order:
+            await call.answer("Заявку не знайдено", show_alert=True)
             return
-        await state.update_data(complaint_order_id=order_id, against_user_id=order["selected_master_id"], against_role="master")
-        await ComplaintWrite.text.set()
-        await call.message.answer("Напишіть текст скарги на майстра:", reply_markup=back_menu_kb())
+        offers = await list_order_offers(order_id)
+        await send_admin_order_detail(dp.bot, call.message.chat.id, order, offers)
         await call.answer()
 
-    @dp.callback_query_handler(lambda c: c.data.startswith("complain_client_"), state="*")
-    async def complain_client(call: types.CallbackQuery, state: FSMContext):
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_expire_order_"), state="*")
+    async def expire_order(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            return
         order_id = int(call.data.split("_")[-1])
         order = await get_order_row(order_id)
-        if not order or order["selected_master_id"] != call.from_user.id:
-            await call.answer("Скарга недоступна", show_alert=True)
+        if not order:
+            await call.answer("Заявку не знайдено", show_alert=True)
             return
-        await state.update_data(complaint_order_id=order_id, against_user_id=order["user_id"], against_role="client")
-        await ComplaintWrite.text.set()
-        await call.message.answer("Напишіть текст скарги на клієнта:", reply_markup=back_menu_kb())
+        await set_order_status(order_id, "expired", order["selected_master_id"])
+        await close_chat(order_id)
+        await call.message.answer("⌛ Заявку закрито як неактуальну.")
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_progress_order_"), state="*")
+    async def progress_order(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            return
+        order_id = int(call.data.split("_")[-1])
+        order = await get_order_row(order_id)
+        if not order:
+            await call.answer("Заявку не знайдено", show_alert=True)
+            return
+        await set_order_status(order_id, "in_progress", order["selected_master_id"])
+        await call.message.answer("🛠 Заявку переведено в статус «в роботі».")
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_done_order_"), state="*")
+    async def done_order(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            return
+        order_id = int(call.data.split("_")[-1])
+        order = await get_order_row(order_id)
+        if not order:
+            await call.answer("Заявку не знайдено", show_alert=True)
+            return
+        await set_order_status(order_id, "done", order["selected_master_id"])
+        await close_chat(order_id)
+        await call.message.answer("🏁 Заявку завершено адміністратором.")
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_reset_order_"), state="*")
+    async def reset_order(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            return
+        order_id = int(call.data.split("_")[-1])
+        order = await get_order_row(order_id)
+        if not order:
+            await call.answer("Заявку не знайдено", show_alert=True)
+            return
+        await set_order_status(order_id, "new", None)
+        await close_chat(order_id)
+        await call.message.answer("🔄 Заявку повернуто в нові.")
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("support_reply_"), state="*")
+    async def support_reply(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            return
+        await state.update_data(support_target_user_id=int(call.data.split("_")[-1]))
+        await SupportReply.text.set()
+        await call.message.answer("Напишіть відповідь користувачу:")
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("page_masters_"), state="*")
+    async def page_masters(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            return
+        await show_admin_masters_page(call.message.chat.id, int(call.data.split("_")[-1]))
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("page_pending_masters_"), state="*")
+    async def page_pending(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            return
+        await show_pending_masters_page(call.message.chat.id, int(call.data.split("_")[-1]))
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("page_orders_"), state="*")
+    async def page_orders(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            return
+        data = call.data.replace("page_orders_", "", 1)
+        status_part, page_str = data.rsplit("_", 1)
+        status_filter = None if status_part == "all" else status_part
+        await show_admin_orders_page(call.message.chat.id, int(page_str), status_filter)
         await call.answer()
