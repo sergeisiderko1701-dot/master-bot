@@ -20,5 +20,6 @@ class Settings:
     page_size: int = int(os.getenv("PAGE_SIZE", "5"))
     online_timeout: int = int(os.getenv("ONLINE_TIMEOUT", "300"))
     max_active_master_orders: int = int(os.getenv("MAX_ACTIVE_MASTER_ORDERS", "3"))
+    master_offer_cooldown: int = int(os.getenv("MASTER_OFFER_COOLDOWN", "60"))
     
 settings = Settings()
