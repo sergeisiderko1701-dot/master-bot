@@ -1,77 +1,157 @@
 import logging
 from aiogram import Bot
+
+from constants import category_label
 from keyboards import admin_order_actions_inline, order_card_master_actions
-from repositories import get_master_name, get_chat_for_order
+from repositories import get_chat_for_order, get_master_name
 from ui_texts import master_card_text
 
 
-async def send_master_card(bot: Bot, chat_id: int, master_row, title="👷 <b>Картка майстра</b>", reply_markup=None):
+STATUS_LABELS = {
+    "new": "Нова",
+    "offered": "Є пропозиції",
+    "matched": "Майстра обрано",
+    "in_progress": "В роботі",
+    "done": "Завершена",
+    "cancelled": "Скасована",
+    "expired": "Прострочена",
+}
+
+
+def safe_val(row, key, default=None):
+    try:
+        value = row[key]
+        return default if value is None else value
+    except Exception:
+        return default
+
+
+def order_status_label(status: str) -> str:
+    return STATUS_LABELS.get(status, status or "-")
+
+
+async def send_master_card(
+    bot: Bot,
+    chat_id: int,
+    master_row,
+    title: str = "👷 <b>Картка майстра</b>",
+    reply_markup=None,
+):
     text = master_card_text(master_row, title)
-    if master_row.get("photo"):
+    photo = safe_val(master_row, "photo")
+
+    if photo:
         try:
-            await bot.send_photo(chat_id, master_row["photo"], caption=text, reply_markup=reply_markup)
+            await bot.send_photo(
+                chat_id,
+                photo,
+                caption=text,
+                reply_markup=reply_markup,
+            )
             return
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning("Не вдалося надіслати фото майстра в чат %s: %s", chat_id, e)
+
     await bot.send_message(chat_id, text, reply_markup=reply_markup)
 
 
-async def send_order_card(bot, chat_id: int, order_row, title: str = "📄 Ваша заявка", reply_markup=None):
+async def send_order_card(
+    bot: Bot,
+    chat_id: int,
+    order_row,
+    title: str = "📄 Ваша заявка",
+    reply_markup=None,
+):
+    category = safe_val(order_row, "category", "-")
+    district = safe_val(order_row, "district", "-")
+    problem = safe_val(order_row, "problem", "-")
+    status = order_status_label(safe_val(order_row, "status", "-"))
+
     text = (
         f"{title}\n\n"
-        f"🛠 Категорія: {order_row['category']}\n"
-        f"📍 Район: {order_row['district']}\n"
-        f"📝 Опис: {order_row['problem']}\n"
-        f"📌 Статус: {order_row['status']}"
+        f"🛠 Категорія: {category_label(category) if category != '-' else '-'}\n"
+        f"📍 Район: {district}\n"
+        f"📝 Опис: {problem}\n"
+        f"📌 Статус: {status}"
     )
 
-    media_file_id = order_row.get("media_file_id")
-    media_type = order_row.get("media_type")
+    media_file_id = safe_val(order_row, "media_file_id")
+    media_type = safe_val(order_row, "media_type")
 
     if media_file_id:
         try:
             if media_type == "photo":
-                await bot.send_photo(chat_id, media_file_id, caption=text, reply_markup=reply_markup)
+                await bot.send_photo(
+                    chat_id,
+                    media_file_id,
+                    caption=text,
+                    reply_markup=reply_markup,
+                )
                 return
-            elif media_type == "video":
-                await bot.send_video(chat_id, media_file_id, caption=text, reply_markup=reply_markup)
+
+            if media_type == "video":
+                await bot.send_video(
+                    chat_id,
+                    media_file_id,
+                    caption=text,
+                    reply_markup=reply_markup,
+                )
                 return
-            else:
-                await bot.send_photo(chat_id, media_file_id, caption=text, reply_markup=reply_markup)
-                return
-        except Exception:
-            pass
+
+            logging.warning(
+                "Невідомий media_type '%s' для заявки %s",
+                media_type,
+                safe_val(order_row, "id", "?"),
+            )
+        except Exception as e:
+            logging.warning(
+                "Не вдалося надіслати медіа по заявці %s в чат %s: %s",
+                safe_val(order_row, "id", "?"),
+                chat_id,
+                e,
+            )
 
     await bot.send_message(chat_id, text, reply_markup=reply_markup)
 
 
 async def send_admin_order_detail(bot: Bot, chat_id: int, order, offers):
-    chat = await get_chat_for_order(order["id"])
-    chat_info = "є" if chat and chat["status"] in ["active", "closed"] else "немає"
-    media_info = "є" if order["media_file_id"] else "немає"
-    selected_master_name = await get_master_name(order["selected_master_id"])
+    order_id = safe_val(order, "id")
+    chat = await get_chat_for_order(order_id)
+    chat_info = "є" if chat and safe_val(chat, "status") in ["active", "closed"] else "немає"
+    media_info = "є" if safe_val(order, "media_file_id") else "немає"
+    selected_master_name = await get_master_name(safe_val(order, "selected_master_id"))
 
     offers_text = "немає"
     if offers:
         parts = []
         for offer in offers:
-            parts.append(f"• <b>{offer['name'] or '-'}</b> · {offer['price']} · {offer['eta']}\n  {offer['comment']}")
+            offer_name = safe_val(offer, "name", "-")
+            offer_price = safe_val(offer, "price", "-")
+            offer_eta = safe_val(offer, "eta", "-")
+            offer_comment = safe_val(offer, "comment", "-")
+            parts.append(
+                f"• <b>{offer_name}</b> · {offer_price} · {offer_eta}\n"
+                f"  {offer_comment}"
+            )
         offers_text = "\n".join(parts)
 
     detail_text = (
-        f"🧾 <b>Деталі заявки #{order['id']}</b>\n\n"
-        f"👤 <b>Клієнт ID:</b> {order['user_id']}\n"
-        f"📍 <b>Район / адреса:</b> {order['district'] or '—'}\n"
+        f"🧾 <b>Деталі заявки #{order_id}</b>\n\n"
+        f"👤 <b>Клієнт ID:</b> {safe_val(order, 'user_id', '-')}\n"
+        f"🛠 <b>Категорія:</b> {category_label(safe_val(order, 'category', '-')) if safe_val(order, 'category') else '-'}\n"
+        f"📍 <b>Район / адреса:</b> {safe_val(order, 'district', '—')}\n"
+        f"📝 <b>Опис:</b> {safe_val(order, 'problem', '—')}\n"
+        f"📌 <b>Статус:</b> {order_status_label(safe_val(order, 'status', '-'))}\n"
         f"💬 <b>Чат:</b> {chat_info}\n"
         f"📷 <b>Медіа:</b> {media_info}\n"
         f"👷 <b>Обраний майстер:</b> {selected_master_name}\n"
-        f"⭐ <b>Оцінка:</b> {order['rating'] if order['rating'] is not None else '—'}\n"
-        f"🗒 <b>Відгук:</b> {order['review_text'] or '—'}\n\n"
+        f"⭐ <b>Оцінка:</b> {safe_val(order, 'rating', '—')}\n"
+        f"🗒 <b>Відгук:</b> {safe_val(order, 'review_text', '—')}\n\n"
         f"📬 <b>Пропозиції майстрів</b>\n{offers_text}"
     )
 
-    media_file_id = order.get("media_file_id")
-    media_type = order.get("media_type")
+    media_file_id = safe_val(order, "media_file_id")
+    media_type = safe_val(order, "media_type")
 
     if media_file_id:
         try:
@@ -80,70 +160,93 @@ async def send_admin_order_detail(bot: Bot, chat_id: int, order, offers):
                     chat_id,
                     media_file_id,
                     caption=detail_text,
-                    reply_markup=admin_order_actions_inline(order["id"], order["status"])
+                    reply_markup=admin_order_actions_inline(order_id, safe_val(order, "status")),
                 )
                 return
-            elif media_type == "video":
+
+            if media_type == "video":
                 await bot.send_video(
                     chat_id,
                     media_file_id,
                     caption=detail_text,
-                    reply_markup=admin_order_actions_inline(order["id"], order["status"])
+                    reply_markup=admin_order_actions_inline(order_id, safe_val(order, "status")),
                 )
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning("Не вдалося надіслати деталі заявки %s з медіа: %s", order_id, e)
 
     await bot.send_message(
         chat_id,
         detail_text,
-        reply_markup=admin_order_actions_inline(order["id"], order["status"])
+        reply_markup=admin_order_actions_inline(order_id, safe_val(order, "status")),
     )
 
 
 async def notify_masters_about_order(bot: Bot, order_row, masters):
+    sent_count = 0
+
     for master in masters:
+        master_user_id = safe_val(master, "user_id")
+        if not master_user_id:
+            continue
+
         try:
             await send_order_card(
                 bot,
-                master["user_id"],
+                master_user_id,
                 order_row,
                 title="🔔 <b>Нова заявка</b>",
-                reply_markup=order_card_master_actions(order_row["id"])
+                reply_markup=order_card_master_actions(safe_val(order_row, "id")),
             )
             await bot.send_message(
-                master["user_id"],
-                "Натисніть <b>📨 Відгукнутись</b>, якщо хочете взяти цю заявку в роботу."
+                master_user_id,
+                "Натисніть <b>📨 Відгукнутись</b>, якщо хочете взяти цю заявку в роботу.",
             )
+            sent_count += 1
         except Exception as e:
-            logging.warning("Помилка повідомлення майстру %s: %s", master["user_id"], e)
+            logging.warning("Помилка повідомлення майстру %s: %s", master_user_id, e)
+
+    logging.info("Розсилка по заявці %s завершена. Надіслано: %s", safe_val(order_row, "id"), sent_count)
 
 
 async def notify_admin_about_order(bot: Bot, admin_id: int, order_row):
     try:
-        await send_order_card(bot, admin_id, order_row, title="📦 <b>Нова заявка клієнта</b>")
+        await send_order_card(
+            bot,
+            admin_id,
+            order_row,
+            title="📦 <b>Нова заявка клієнта</b>",
+        )
     except Exception as e:
         logging.warning("Помилка повідомлення адміну: %s", e)
 
 
 async def send_chat_history(bot: Bot, chat_id: int, order_id: int, messages):
     if not messages:
-        await bot.send_message(chat_id, f"📜 <b>Історія чату по заявці #{order_id}</b>\n\nПовідомлень поки немає.")
+        await bot.send_message(
+            chat_id,
+            f"📜 <b>Історія чату по заявці #{order_id}</b>\n\nПовідомлень поки немає.",
+        )
         return
 
-    lines = [f"📜 <b>Історія чату по заявці #{order_id}</b>\n\nПоказано повідомлень: {len(messages)}", ""]
+    lines = [
+        f"📜 <b>Історія чату по заявці #{order_id}</b>\n\nПоказано повідомлень: {len(messages)}",
+        "",
+    ]
 
     for msg in reversed(messages):
-        sender = "👤 <b>Клієнт</b>" if msg["sender_role"] == "client" else "👷 <b>Майстер</b>"
+        sender = "👤 <b>Клієнт</b>" if safe_val(msg, "sender_role") == "client" else "👷 <b>Майстер</b>"
+        message_type = safe_val(msg, "message_type", "text")
+        msg_text = safe_val(msg, "text", "")
 
-        if msg["message_type"] == "text":
-            body = msg["text"] or "Без тексту"
-        elif msg["message_type"] == "photo":
-            body = f"📷 {msg['text'] or 'Фото без підпису'}"
-        elif msg["message_type"] == "video":
-            body = f"📹 {msg['text'] or 'Відео без підпису'}"
+        if message_type == "text":
+            body = msg_text or "Без тексту"
+        elif message_type == "photo":
+            body = f"📷 {msg_text or 'Фото без підпису'}"
+        elif message_type == "video":
+            body = f"📹 {msg_text or 'Відео без підпису'}"
         else:
-            body = f"[{msg['message_type']}] {msg['text'] or ''}".strip()
+            body = f"[{message_type}] {msg_text}".strip()
 
         lines.append(f"{sender}:\n{body}\n")
 
