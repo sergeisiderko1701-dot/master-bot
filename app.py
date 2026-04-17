@@ -26,7 +26,11 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-LOCK_KEY = 987654321
+
+def make_lock_key(token: str, instance_name: str = "") -> int:
+    raw = f"{instance_name}:{token}".encode()
+    digest = hashlib.sha256(raw).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
 
 
 def register_handlers(dp: Dispatcher) -> None:
@@ -42,6 +46,7 @@ async def main():
     bot = None
     dp = None
     lock_conn = None
+    lock_key = None
 
     try:
         token = settings.bot_token.strip()
@@ -52,29 +57,34 @@ async def main():
             raise ValueError("DATABASE_URL is empty")
 
         fingerprint = hashlib.sha256(token.encode()).hexdigest()[:12]
+        lock_key = make_lock_key(token, settings.app_instance_name or "")
 
         logger.info("PID: %s", os.getpid())
         logger.info("BOT_TOKEN fingerprint: %s", fingerprint)
         logger.info("APP_INSTANCE_NAME: %s", settings.app_instance_name)
         logger.info("HOSTNAME: %s", socket.gethostname())
-
-        logger.info("Initializing database...")
-        await init_db(settings.database_url)
-        logger.info("Database initialized")
+        logger.info("LOCK_KEY: %s", lock_key)
 
         logger.info("Connecting to PostgreSQL for advisory lock...")
         lock_conn = await asyncpg.connect(settings.database_url)
 
-        row = await lock_conn.fetchrow(
-            "SELECT pg_try_advisory_lock($1) AS locked",
-            LOCK_KEY
+        pg_pid = await lock_conn.fetchval("SELECT pg_backend_pid()")
+        logger.info("Lock connection backend pid: %s", pg_pid)
+
+        locked = await lock_conn.fetchval(
+            "SELECT pg_try_advisory_lock($1)",
+            lock_key,
         )
 
-        if not row or not row["locked"]:
-            logger.error("Another instance already owns polling lock. Force exit.")
+        if not locked:
+            logger.error("Another instance already owns polling lock. Exit.")
             raise SystemExit(1)
 
         logger.info("Polling lock acquired")
+
+        logger.info("Initializing database...")
+        await init_db(settings.database_url)
+        logger.info("Database initialized")
 
         bot = Bot(token=token, parse_mode="HTML")
         storage = MemoryStorage()
@@ -83,24 +93,22 @@ async def main():
         me = await bot.get_me()
         logger.info("Running as bot: @%s (id=%s)", me.username, me.id)
 
-        await bot.delete_webhook(drop_pending_updates=True)
+        await bot.delete_webhook(drop_pending_updates=False)
 
         register_handlers(dp)
 
         logger.info("Bot starting polling...")
-        logger.info("Start polling.")
+        await dp.start_polling()
 
-        try:
-            await dp.start_polling()
-        except TerminatedByOtherGetUpdates:
-            logger.error("Another Telegram polling instance detected. Force exit.")
-            raise SystemExit(1)
+    except TerminatedByOtherGetUpdates:
+        logger.exception("Telegram reported another active polling instance")
+        raise SystemExit(1)
 
     except SystemExit:
         raise
 
-    except Exception as e:
-        logger.exception("Fatal error while starting bot: %s", e)
+    except Exception:
+        logger.exception("Fatal error while starting bot")
         raise
 
     finally:
@@ -121,7 +129,11 @@ async def main():
 
         if lock_conn:
             try:
-                await lock_conn.execute("SELECT pg_advisory_unlock($1)", LOCK_KEY)
+                if lock_key is not None:
+                    await lock_conn.execute(
+                        "SELECT pg_advisory_unlock($1)",
+                        lock_key,
+                    )
             except Exception:
                 logger.exception("Failed to release advisory lock")
 
