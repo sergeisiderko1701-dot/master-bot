@@ -2,13 +2,14 @@ import asyncio
 import hashlib
 import logging
 import os
+import socket
 
 import asyncpg
 from aiogram import Bot, Dispatcher
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.utils.exceptions import TerminatedByOtherGetUpdates
 
 import admin
-import chat
 import client
 import common
 import master
@@ -32,7 +33,6 @@ def register_handlers(dp: Dispatcher) -> None:
     client.register(dp)
     master.register(dp)
     offers.register(dp)
-    chat.register(dp)
     admin.register(dp)
     misc.register(dp)
     common.register(dp)
@@ -55,6 +55,8 @@ async def main():
 
         logger.info("PID: %s", os.getpid())
         logger.info("BOT_TOKEN fingerprint: %s", fingerprint)
+        logger.info("APP_INSTANCE_NAME: %s", settings.app_instance_name)
+        logger.info("HOSTNAME: %s", socket.gethostname())
 
         logger.info("Initializing database...")
         await init_db(settings.database_url)
@@ -69,8 +71,8 @@ async def main():
         )
 
         if not row or not row["locked"]:
-            logger.warning("Another instance already owns polling lock. Exiting.")
-            return
+            logger.error("Another instance already owns polling lock. Force exit.")
+            raise SystemExit(1)
 
         logger.info("Polling lock acquired")
 
@@ -86,7 +88,16 @@ async def main():
         register_handlers(dp)
 
         logger.info("Bot starting polling...")
-        await dp.start_polling()
+        logger.info("Start polling.")
+
+        try:
+            await dp.start_polling()
+        except TerminatedByOtherGetUpdates:
+            logger.error("Another Telegram polling instance detected. Force exit.")
+            raise SystemExit(1)
+
+    except SystemExit:
+        raise
 
     except Exception as e:
         logger.exception("Fatal error while starting bot: %s", e)
