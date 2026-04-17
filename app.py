@@ -1,14 +1,11 @@
 import asyncio
+import hashlib
 import logging
 import os
-import hashlib
-import asyncpg
 
+import asyncpg
 from aiogram import Bot, Dispatcher
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
-
-from config import settings
-from db import init_db
 
 import admin
 import chat
@@ -16,6 +13,8 @@ import client
 import master
 import misc
 import offers
+from config import settings
+from db import init_db
 
 
 logging.basicConfig(
@@ -23,66 +22,102 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
+logger = logging.getLogger(__name__)
+
 LOCK_KEY = 987654321
 
 
+def register_handlers(dp: Dispatcher) -> None:
+    client.register(dp)
+    master.register(dp)
+    offers.register(dp)
+    chat.register(dp)
+    admin.register(dp)
+    misc.register(dp)
+
+
 async def main():
-    token = settings.bot_token.strip()
-    fingerprint = hashlib.sha256(token.encode()).hexdigest()[:12]
-
-    logging.info(f"PID: {os.getpid()}")
-    logging.info(f"BOT_TOKEN fingerprint: {fingerprint}")
-
-    await init_db(settings.database_url)
-
-    lock_conn = await asyncpg.connect(settings.database_url)
-    row = await lock_conn.fetchrow(
-        "SELECT pg_try_advisory_lock($1) AS locked",
-        LOCK_KEY
-    )
-
-    if not row or not row["locked"]:
-        logging.warning("Another instance already owns polling lock. Exiting.")
-        await lock_conn.close()
-        return
-
-    logging.info("Polling lock acquired")
-
-    bot = Bot(token=token, parse_mode="HTML")
+    bot = None
+    dp = None
+    lock_conn = None
 
     try:
+        token = settings.bot_token.strip()
+        if not token:
+            raise ValueError("BOT_TOKEN is empty")
+
+        if not settings.database_url:
+            raise ValueError("DATABASE_URL is empty")
+
+        fingerprint = hashlib.sha256(token.encode()).hexdigest()[:12]
+
+        logger.info("PID: %s", os.getpid())
+        logger.info("BOT_TOKEN fingerprint: %s", fingerprint)
+
+        logger.info("Initializing database...")
+        await init_db(settings.database_url)
+        logger.info("Database initialized")
+
+        logger.info("Connecting to PostgreSQL for advisory lock...")
+        lock_conn = await asyncpg.connect(settings.database_url)
+
+        row = await lock_conn.fetchrow(
+            "SELECT pg_try_advisory_lock($1) AS locked",
+            LOCK_KEY
+        )
+
+        if not row or not row["locked"]:
+            logger.warning("Another instance already owns polling lock. Exiting.")
+            return
+
+        logger.info("Polling lock acquired")
+
+        bot = Bot(token=token, parse_mode="HTML")
+        storage = MemoryStorage()
+        dp = Dispatcher(bot, storage=storage)
+
         me = await bot.get_me()
-        logging.info(f"Running as bot: @{me.username} (id={me.id})")
+        logger.info("Running as bot: @%s (id=%s)", me.username, me.id)
 
         await bot.delete_webhook(drop_pending_updates=True)
 
-        dp = Dispatcher(bot, storage=MemoryStorage())
+        register_handlers(dp)
 
-        client.register(dp)
-        master.register(dp)
-        offers.register(dp)
-        chat.register(dp)
-        admin.register(dp)
-        misc.register(dp)
-
-        logging.info("Bot starting...")
-        logging.info("Start polling.")
-
+        logger.info("Bot starting polling...")
         await dp.start_polling()
 
+    except Exception as e:
+        logger.exception("Fatal error while starting bot: %s", e)
+        raise
+
     finally:
-        try:
-            await bot.session.close()
-        except Exception:
-            pass
+        logger.info("Shutting down bot...")
 
-        try:
-            await lock_conn.execute("SELECT pg_advisory_unlock($1)", LOCK_KEY)
-            await lock_conn.close()
-        except Exception:
-            pass
+        if dp and dp.storage:
+            try:
+                await dp.storage.close()
+                await dp.storage.wait_closed()
+            except Exception:
+                logger.exception("Failed to close dispatcher storage")
 
-        logging.info("Bot session closed")
+        if bot:
+            try:
+                await bot.session.close()
+            except Exception:
+                logger.exception("Failed to close bot session")
+
+        if lock_conn:
+            try:
+                await lock_conn.execute("SELECT pg_advisory_unlock($1)", LOCK_KEY)
+            except Exception:
+                logger.exception("Failed to release advisory lock")
+
+            try:
+                await lock_conn.close()
+            except Exception:
+                logger.exception("Failed to close lock connection")
+
+        logger.info("Bot stopped")
 
 
 if __name__ == "__main__":
