@@ -35,6 +35,7 @@ def register_handlers(dp: Dispatcher) -> None:
     chat.register(dp)
     admin.register(dp)
     misc.register(dp)
+    common.register(dp)
 
 
 async def main():
