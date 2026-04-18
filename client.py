@@ -1,3 +1,5 @@
+import logging
+
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 
@@ -33,6 +35,8 @@ from ui_texts import (
 )
 from utils import is_admin, normalize_text, now_ts
 
+
+logger = logging.getLogger(__name__)
 
 BACK_BUTTONS = {"⬅️ Назад", "Назад", "🔙 Назад"}
 SKIP_WORDS = {"пропустити", "skip", "-"}
@@ -196,26 +200,36 @@ def register(dp):
 
         order_row = await get_order_row(order_id)
 
-        # РОЗСИЛКА ВСІМ APPROVED МАЙСТРАМ У ЦІЙ КАТЕГОРІЇ
+        # БЕРЕМО ВСІХ APPROVED МАЙСТРІВ
         masters = await fetch(
             """
-            SELECT user_id
+            SELECT user_id, category, status
             FROM masters
             WHERE status='approved'
-              AND category=$1
-            """,
-            data["client_category"],
+            """
         )
+
+        order_category = (data["client_category"] or "").strip()
+        filtered_masters = []
+
+        for master in masters:
+            master_category = (master["category"] or "").strip()
+            if master_category == order_category:
+                filtered_masters.append(master)
+
+        logger.info("ORDER ID=%s CATEGORY=%s", order_id, order_category)
+        logger.info("APPROVED MASTERS FOUND=%s", len(masters))
+        logger.info("FILTERED MASTERS FOR ORDER=%s", len(filtered_masters))
 
         try:
             await notify_admin_about_order(dp.bot, settings.admin_id, order_row)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Помилка повідомлення адміну по заявці %s: %s", order_id, e)
 
         try:
-            await notify_masters_about_order(dp.bot, order_row, masters)
-        except Exception:
-            pass
+            await notify_masters_about_order(dp.bot, order_row, filtered_masters)
+        except Exception as e:
+            logger.warning("Помилка розсилки майстрам по заявці %s: %s", order_id, e)
 
         await state.finish()
         await message.answer(
