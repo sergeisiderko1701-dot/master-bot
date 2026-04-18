@@ -29,12 +29,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def make_lock_key(token: str, instance_name: str = "") -> int:
+def make_lock_key(token: str) -> int:
     """
-    Генерує стабільний advisory lock key для конкретного бота/середовища.
+    Генерує стабільний advisory lock key лише з BOT_TOKEN.
+    Це важливо, щоб усі інстанси одного й того ж бота
+    боролися за один і той самий lock.
     """
-    raw = f"{instance_name}:{token}".encode("utf-8")
-    digest = hashlib.sha256(raw).digest()
+    digest = hashlib.sha256(token.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
 
@@ -53,6 +54,8 @@ async def main():
     storage = None
     lock_conn = None
     polling_task = None
+    shutdown_wait_task = None
+    lock_key = None
 
     shutdown_event = asyncio.Event()
 
@@ -69,15 +72,21 @@ async def main():
         if not database_url:
             raise ValueError("DATABASE_URL is empty")
 
-        app_instance_name = (settings.app_instance_name or "").strip()
+        enable_polling = os.getenv("ENABLE_POLLING", "true").lower() == "true"
+
         fingerprint = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
-        lock_key = make_lock_key(token, app_instance_name)
+        lock_key = make_lock_key(token)
 
         logger.info("PID: %s", os.getpid())
         logger.info("HOSTNAME: %s", socket.gethostname())
-        logger.info("APP_INSTANCE_NAME: %s", app_instance_name or "<empty>")
+        logger.info("APP_INSTANCE_NAME: %s", (settings.app_instance_name or "").strip() or "<empty>")
         logger.info("BOT_TOKEN fingerprint: %s", fingerprint)
+        logger.info("ENABLE_POLLING: %s", enable_polling)
         logger.info("LOCK_KEY: %s", lock_key)
+
+        if not enable_polling:
+            logger.warning("Polling disabled for this instance. Exiting without polling.")
+            return
 
         logger.info("Connecting to PostgreSQL for polling lock...")
         lock_conn = await asyncpg.connect(database_url)
@@ -136,9 +145,10 @@ async def main():
         )
 
         polling_task = asyncio.create_task(dp.start_polling())
+        shutdown_wait_task = asyncio.create_task(shutdown_event.wait())
 
         done, pending = await asyncio.wait(
-            {polling_task, asyncio.create_task(shutdown_event.wait())},
+            {polling_task, shutdown_wait_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -151,16 +161,15 @@ async def main():
                     await polling_task
 
         else:
-            # polling_task завершився сам
-            for task in done:
-                if task is polling_task:
-                    exc = task.exception()
-                    if exc:
-                        raise exc
+            if polling_task in done:
+                exc = polling_task.exception()
+                if exc:
+                    raise exc
 
     except TerminatedByOtherGetUpdates:
         logger.exception(
             "Telegram reported conflict: another active polling instance exists. "
+            "Make sure only one instance with this BOT_TOKEN is running. "
             "PID=%s HOST=%s",
             os.getpid(),
             socket.gethostname(),
@@ -185,6 +194,11 @@ async def main():
     finally:
         logger.info("Shutting down bot...")
 
+        if shutdown_wait_task and not shutdown_wait_task.done():
+            shutdown_wait_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await shutdown_wait_task
+
         if polling_task and not polling_task.done():
             polling_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -200,23 +214,28 @@ async def main():
 
         if bot:
             try:
-                await bot.session.close()
+                session = await bot.get_session()
+                await session.close()
                 logger.info("Bot session closed")
             except Exception:
                 logger.exception("Failed to close bot session")
 
         if lock_conn:
             try:
-                unlocked = await lock_conn.fetchval(
-                    "SELECT pg_advisory_unlock($1)",
-                    lock_key,
-                )
-                logger.info("Polling lock released: %s", unlocked)
+                if not lock_conn.is_closed() and lock_key is not None:
+                    unlocked = await lock_conn.fetchval(
+                        "SELECT pg_advisory_unlock($1)",
+                        lock_key,
+                    )
+                    logger.info("Polling lock released: %s", unlocked)
+                else:
+                    logger.warning("Lock connection already closed before unlock")
             except Exception:
                 logger.exception("Failed to release advisory lock")
 
             try:
-                await lock_conn.close()
+                if not lock_conn.is_closed():
+                    await lock_conn.close()
                 logger.info("Lock connection closed")
             except Exception:
                 logger.exception("Failed to close lock connection")
