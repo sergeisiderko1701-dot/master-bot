@@ -40,13 +40,37 @@ logger = logging.getLogger(__name__)
 
 BACK_BUTTONS = {"⬅️ Назад", "Назад", "🔙 Назад"}
 SKIP_WORDS = {"пропустити", "skip", "-"}
+CHANGE_CATEGORY_BUTTONS = {"🔄 Змінити спеціальність", "🔧 Змінити спеціальність"}
 
 
 def register(dp):
     @dp.message_handler(lambda m: m.text == "👤 Клієнт", state="*")
     async def client_menu(message: types.Message, state: FSMContext):
+        data = await state.get_data()
+        category = data.get("client_category")
+
         await state.finish()
-        await message.answer(choose_category_text(), reply_markup=categories_kb())
+
+        if category:
+            await state.update_data(client_category=category)
+            await message.answer(
+                client_actions_text(category),
+                reply_markup=client_actions_kb(),
+            )
+            return
+
+        await message.answer(
+            choose_category_text(),
+            reply_markup=categories_kb(),
+        )
+
+    @dp.message_handler(lambda m: m.text in CHANGE_CATEGORY_BUTTONS, state="*")
+    async def change_category(message: types.Message, state: FSMContext):
+        await state.update_data(client_category=None)
+        await message.answer(
+            choose_category_text(),
+            reply_markup=categories_kb(),
+        )
 
     @dp.message_handler(lambda m: m.text in BACK_BUTTONS, state="*")
     async def back_handler(message: types.Message, state: FSMContext):
@@ -72,6 +96,14 @@ def register(dp):
                     choose_category_text(),
                     reply_markup=categories_kb(),
                 )
+            return
+
+        category = data.get("client_category")
+        if category:
+            await message.answer(
+                client_actions_text(category),
+                reply_markup=client_actions_kb(),
+            )
             return
 
         await message.answer(
@@ -200,7 +232,6 @@ def register(dp):
 
         order_row = await get_order_row(order_id)
 
-        # БЕРЕМО ВСІХ APPROVED МАЙСТРІВ
         masters = await fetch(
             """
             SELECT user_id, category, status
@@ -232,6 +263,8 @@ def register(dp):
             logger.warning("Помилка розсилки майстрам по заявці %s: %s", order_id, e)
 
         await state.finish()
+        await state.update_data(client_category=order_category)
+
         await message.answer(
             order_created_text(),
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
