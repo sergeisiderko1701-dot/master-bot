@@ -1,4 +1,5 @@
 import logging
+import re
 
 from aiogram import types
 from aiogram.dispatcher import FSMContext
@@ -42,6 +43,36 @@ BACK_BUTTONS = {"⬅️ Назад", "Назад", "🔙 Назад"}
 SKIP_WORDS = {"пропустити", "skip", "-"}
 CHANGE_CATEGORY_BUTTONS = {"🔄 Змінити спеціальність", "🔧 Змінити спеціальність"}
 
+BAD_WORDS = {
+    "тест",
+    "test",
+    "asdf",
+    "qwerty",
+    "12345",
+    "фігня",
+}
+
+
+def is_bad_problem_text(text: str) -> bool:
+    low = (text or "").lower()
+    if len(low) < 10:
+        return True
+    return any(word in low for word in BAD_WORDS)
+
+
+def normalize_phone(value: str) -> str:
+    raw = (value or "").strip()
+    raw = raw.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if raw.startswith("8"):
+        raw = "+3" + raw
+    if raw.startswith("380"):
+        raw = "+" + raw
+    return raw
+
+
+def is_valid_phone(value: str) -> bool:
+    return bool(re.fullmatch(r"\+380\d{9}", value))
+
 
 def register(dp):
     @dp.message_handler(lambda m: m.text == "👤 Клієнт", state="*")
@@ -80,6 +111,7 @@ def register(dp):
         if current_state in (
             ClientCreateOrder.district.state,
             ClientCreateOrder.problem.state,
+            ClientCreateOrder.phone.state,
             ClientCreateOrder.media.state,
         ):
             category = data.get("client_category")
@@ -179,14 +211,34 @@ def register(dp):
     async def client_order_problem(message: types.Message, state: FSMContext):
         problem = normalize_text(message.text, 1500)
 
-        if not problem or len(problem) < 5:
+        if not problem or is_bad_problem_text(problem):
             await message.answer(
-                "Опишіть проблему трохи детальніше.",
+                "Опишіть проблему трохи конкретніше. Короткий або тестовий текст не підходить.",
                 reply_markup=back_menu_kb(),
             )
             return
 
         await state.update_data(problem=problem)
+        await ClientCreateOrder.phone.set()
+        await message.answer(
+            "📞 <b>Ваш номер телефону</b>\n\n"
+            "Напишіть номер у форматі <b>+380XXXXXXXXX</b>.\n"
+            "Після вибору майстра ми відкриємо контакти обом сторонам.",
+            reply_markup=back_menu_kb(),
+        )
+
+    @dp.message_handler(state=ClientCreateOrder.phone, content_types=types.ContentTypes.TEXT)
+    async def client_order_phone(message: types.Message, state: FSMContext):
+        phone = normalize_phone(message.text)
+
+        if not is_valid_phone(phone):
+            await message.answer(
+                "Введіть коректний номер у форматі <b>+380XXXXXXXXX</b>.",
+                reply_markup=back_menu_kb(),
+            )
+            return
+
+        await state.update_data(client_phone=phone)
         await ClientCreateOrder.media.set()
         await message.answer(
             ask_media_text(),
@@ -222,6 +274,7 @@ def register(dp):
             problem=data.get("problem", ""),
             media_type=media_type,
             media_file_id=media_file_id,
+            client_phone=data.get("client_phone"),
         )
 
         await set_cooldown(
