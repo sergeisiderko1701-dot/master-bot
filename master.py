@@ -139,7 +139,13 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("master_cat_"), state=MasterRegistration.category)
     async def reg_category(call: types.CallbackQuery, state: FSMContext):
-        await state.update_data(category=call.data.split("master_cat_", 1)[1])
+        category_value = call.data.split("master_cat_", 1)[1].strip()
+
+        if category_value not in {"plumber", "electrician", "repair"}:
+            await call.answer("Некоректна категорія", show_alert=True)
+            return
+
+        await state.update_data(category=category_value)
         await MasterRegistration.district.set()
         await call.message.answer(ask_district_text(), reply_markup=back_menu_kb())
         await call.answer()
@@ -228,6 +234,7 @@ def register(dp):
         data["user_id"] = message.from_user.id
         data["photo"] = photo
 
+        # category тут уже гарантовано: plumber/electrician/repair
         await create_or_update_master(data)
 
         master_row = await fetchrow(
