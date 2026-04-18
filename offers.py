@@ -79,39 +79,48 @@ def register(dp):
             reply_markup=offer_select_inline(offer_id),
         )
 
-    def build_client_contact_text(user: types.User, order_id: int) -> str:
+    def _safe_val(row, key, default=None):
+        try:
+            value = row[key]
+            return default if value is None else value
+        except Exception:
+            return default
+
+    def build_client_contact_text(user: types.User, order_row) -> str:
         full_name = " ".join(part for part in [user.first_name, user.last_name] if part).strip() or "Клієнт"
         username_line = f"🔗 Username: @{user.username}\n" if user.username else ""
         tg_link = f'<a href="tg://user?id={user.id}">{full_name}</a>'
+        phone_line = f"📞 Телефон: {_safe_val(order_row, 'client_phone')}\n" if _safe_val(order_row, "client_phone") else ""
 
         return (
-            f"👤 <b>Контакти клієнта по заявці #{order_id}</b>\n\n"
+            f"👤 <b>Контакти клієнта</b>\n\n"
             f"Ім'я: {full_name}\n"
+            f"{phone_line}"
             f"{username_line}"
             f"Telegram: {tg_link}\n"
             f"ID: <code>{user.id}</code>\n\n"
-            f"Напишіть клієнту в Telegram або через кнопку ✉️ у боті."
+            f"Щоб бачити контакти клієнта, майстра було обрано по заявці."
         )
 
     def build_master_contact_text(master_row, order_id: int) -> str:
-        name = master_row["name"] or "Майстер"
-        phone = master_row["phone"] or "—"
+        name = _safe_val(master_row, "name", "Майстер")
+        phone = _safe_val(master_row, "phone", "—")
 
         return (
             f"👷 <b>Контакти майстра по заявці #{order_id}</b>\n\n"
             f"Ім'я: {name}\n"
             f"📞 Телефон: {phone}\n\n"
-            f"Можете зв'язатися напряму або написати через кнопку ✉️ у боті."
+            f"Контакти відкрито. Можете дзвонити напряму або написати через ✉️ у боті."
         )
 
     async def share_contacts_after_choose(call: types.CallbackQuery, order_id: int, offer_full):
         """
-        Тут у майбутньому легко вставляється комісія:
-        - перевірка payment/commission_paid
-        - тільки після цього відправляти контакти майстру
+        У майбутньому саме тут додається комісія:
+        if not commission_paid:
+            return
         """
+        order_row = await get_order_row(order_id)
 
-        # Клієнту -> контакти майстра
         try:
             await dp.bot.send_message(
                 call.from_user.id,
@@ -121,15 +130,14 @@ def register(dp):
         except Exception as e:
             logger.warning("Не вдалося надіслати контакти майстра клієнту %s: %s", call.from_user.id, e)
 
-        # Майстру -> контакти клієнта
         try:
             await dp.bot.send_message(
                 offer_full["master_user_id"],
-                build_client_contact_text(call.from_user, order_id),
+                build_client_contact_text(call.from_user, order_row),
                 reply_markup=selected_order_master_actions(order_id),
             )
         except Exception as e:
-            logger.warning("Не вдалося надіслати контакти клієнта майстру %s: %s", offer_full['master_user_id'], e)
+            logger.warning("Не вдалося надіслати контакти клієнта майстру %s: %s", offer_full["master_user_id"], e)
 
     async def start_dialog_write(
         message_or_call,
@@ -336,7 +344,8 @@ def register(dp):
 
         await state.finish()
         await message.answer(
-            "✅ <b>Пропозицію надіслано клієнту</b>",
+            "✅ <b>Пропозицію надіслано клієнту</b>\n\n"
+            "Після вибору клієнтом контакти будуть відкриті автоматично.",
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
 
@@ -355,7 +364,9 @@ def register(dp):
 
         await call.message.answer(
             "✅ <b>Майстра обрано</b>\n\n"
-            "Контакти вже відкрито. Можете написати через ✉️ або зв'язатися напряму.",
+            "Контакти відкрито.\n"
+            "Можна писати в боті через ✉️ або дзвонити напряму.\n"
+            "Якщо щось не так — використайте кнопку скарги.",
             reply_markup=client_order_actions_inline(order_id, "matched"),
         )
 
@@ -366,7 +377,7 @@ def register(dp):
                 await dp.bot.send_message(
                     offer_full["master_user_id"],
                     f"🎉 <b>Вашу пропозицію обрано по заявці #{order_id}</b>\n\n"
-                    f"Контакти клієнта вже відкрито.",
+                    f"Контакти клієнта відкрито. Можете зв'язатися напряму або написати через ✉️ у боті.",
                     reply_markup=selected_order_master_actions(order_id),
                 )
             except Exception as e:
@@ -376,7 +387,7 @@ def register(dp):
             try:
                 await dp.bot.send_message(
                     order["user_id"],
-                    f"📜 <b>Історія діалогу по заявці #{order_id}</b> буде доступна в кнопці історії.",
+                    f"📜 <b>Історія діалогу по заявці #{order_id}</b> буде доступна через кнопку історії.",
                     reply_markup=client_order_actions_inline(order_id, "matched"),
                 )
             except Exception as e:
@@ -482,8 +493,17 @@ def register(dp):
         msgs = await get_chat_history(data["order_id"], 30)
         await send_chat_history(dp.bot, message.chat.id, data["order_id"], msgs)
 
-    @dp.message_handler(lambda m: m.text == "❌ Закрити чат", state=ChatFlow.message)
+    @dp.message_handler(lambda m: m.text == "❌ Закрити", state=ChatFlow.message)
     async def close_dialog_mode(message: types.Message, state: FSMContext):
+        await state.finish()
+        await message.answer(
+            "✋ <b>Режим написання закрито</b>\n\n"
+            "Щоб написати ще раз — натисніть ✉️ по заявці.",
+            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+        )
+
+    @dp.message_handler(lambda m: m.text == "❌ Закрити чат", state=ChatFlow.message)
+    async def close_dialog_mode_legacy(message: types.Message, state: FSMContext):
         await state.finish()
         await message.answer(
             "✋ <b>Режим написання закрито</b>\n\n"
