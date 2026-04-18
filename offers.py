@@ -1,3 +1,5 @@
+import logging
+
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 
@@ -27,9 +29,11 @@ from repositories import (
 )
 from services import send_chat_history
 from states import ChatFlow, OfferCreate
-from ui_texts import chat_media_caption, chat_open_text, chat_text_message, offer_card_text
+from ui_texts import chat_media_caption, chat_text_message, offer_card_text
 from utils import is_admin, normalize_text, now_ts
 
+
+logger = logging.getLogger(__name__)
 
 BACK_BUTTONS = {"⬅️ Назад", "Назад", "🔙 Назад"}
 SKIP_WORDS = {"пропустити", "skip", "-"}
@@ -49,7 +53,9 @@ def register(dp):
                 offers.status,
                 masters.name,
                 masters.rating,
-                masters.reviews_count
+                masters.reviews_count,
+                masters.phone,
+                masters.category
             FROM offers
             JOIN masters ON masters.user_id = offers.master_user_id
             WHERE offers.id=$1
@@ -60,6 +66,7 @@ def register(dp):
     async def send_offer_to_client(client_user_id: int, order_id: int, offer_id: int):
         offer = await get_offer_full_row(offer_id)
         if not offer:
+            logger.warning("Offer %s not found for client notification", offer_id)
             return
 
         await dp.bot.send_message(
@@ -72,16 +79,68 @@ def register(dp):
             reply_markup=offer_select_inline(offer_id),
         )
 
-    async def open_chat_for_user(
-        call: types.CallbackQuery,
+    def build_client_contact_text(user: types.User, order_id: int) -> str:
+        full_name = " ".join(part for part in [user.first_name, user.last_name] if part).strip() or "Клієнт"
+        username_line = f"🔗 Username: @{user.username}\n" if user.username else ""
+        tg_link = f'<a href="tg://user?id={user.id}">{full_name}</a>'
+
+        return (
+            f"👤 <b>Контакти клієнта по заявці #{order_id}</b>\n\n"
+            f"Ім'я: {full_name}\n"
+            f"{username_line}"
+            f"Telegram: {tg_link}\n"
+            f"ID: <code>{user.id}</code>\n\n"
+            f"Напишіть клієнту в Telegram або через кнопку ✉️ у боті."
+        )
+
+    def build_master_contact_text(master_row, order_id: int) -> str:
+        name = master_row["name"] or "Майстер"
+        phone = master_row["phone"] or "—"
+
+        return (
+            f"👷 <b>Контакти майстра по заявці #{order_id}</b>\n\n"
+            f"Ім'я: {name}\n"
+            f"📞 Телефон: {phone}\n\n"
+            f"Можете зв'язатися напряму або написати через кнопку ✉️ у боті."
+        )
+
+    async def share_contacts_after_choose(call: types.CallbackQuery, order_id: int, offer_full):
+        """
+        Тут у майбутньому легко вставляється комісія:
+        - перевірка payment/commission_paid
+        - тільки після цього відправляти контакти майстру
+        """
+
+        # Клієнту -> контакти майстра
+        try:
+            await dp.bot.send_message(
+                call.from_user.id,
+                build_master_contact_text(offer_full, order_id),
+                reply_markup=client_order_actions_inline(order_id, "matched"),
+            )
+        except Exception as e:
+            logger.warning("Не вдалося надіслати контакти майстра клієнту %s: %s", call.from_user.id, e)
+
+        # Майстру -> контакти клієнта
+        try:
+            await dp.bot.send_message(
+                offer_full["master_user_id"],
+                build_client_contact_text(call.from_user, order_id),
+                reply_markup=selected_order_master_actions(order_id),
+            )
+        except Exception as e:
+            logger.warning("Не вдалося надіслати контакти клієнта майстру %s: %s", offer_full['master_user_id'], e)
+
+    async def start_dialog_write(
+        message_or_call,
         state: FSMContext,
         *,
         order_id: int,
         role: str,
         target_user_id: int,
         chat_id: int,
-        is_client: bool,
     ):
+        await state.finish()
         await state.update_data(
             chat_role=role,
             order_id=order_id,
@@ -89,11 +148,18 @@ def register(dp):
             chat_id=chat_id,
         )
         await ChatFlow.message.set()
-        await call.message.answer(
-            chat_open_text(order_id, is_client),
-            reply_markup=chat_reply_kb(),
+
+        text = (
+            f"✉️ <b>Повідомлення по заявці #{order_id}</b>\n\n"
+            f"Надішліть <b>одне</b> повідомлення, фото або відео.\n"
+            f"Після відправки режим автоматично закриється."
         )
-        await call.answer()
+
+        if isinstance(message_or_call, types.CallbackQuery):
+            await message_or_call.message.answer(text, reply_markup=chat_reply_kb())
+            await message_or_call.answer()
+        else:
+            await message_or_call.answer(text, reply_markup=chat_reply_kb())
 
     # =========================
     # OFFERS FLOW
@@ -143,7 +209,8 @@ def register(dp):
         await OfferCreate.price.set()
 
         await call.message.answer(
-            f"💰 <b>Відгук на заявку #{order_id}</b>\n\nВкажіть ціну або діапазон.\n"
+            f"💰 <b>Відгук на заявку #{order_id}</b>\n\n"
+            f"Вкажіть ціну або діапазон.\n"
             f"Наприклад: <b>800 грн</b> або <b>800–1200 грн</b>",
             reply_markup=back_menu_kb(),
         )
@@ -173,7 +240,9 @@ def register(dp):
         await state.update_data(offer_price=price)
         await OfferCreate.eta.set()
         await message.answer(
-            "⏱ <b>Коли зможете?</b>\n\nНапишіть коротко.\nНаприклад: <b>через 1 годину</b> або <b>сьогодні до 18:00</b>",
+            "⏱ <b>Коли зможете?</b>\n\n"
+            "Напишіть коротко.\n"
+            "Наприклад: <b>через 1 годину</b> або <b>сьогодні до 18:00</b>",
             reply_markup=back_menu_kb(),
         )
 
@@ -251,7 +320,7 @@ def register(dp):
         if not offer_id:
             await state.finish()
             await message.answer(
-                "Не вдалося створити пропозицію. Можливо, заявка вже неактуальна.",
+                "Не вдалося створити пропозицію. Можливо, заявка вже неактуальна або ви вже відгукувались.",
                 reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
             )
             return
@@ -262,8 +331,8 @@ def register(dp):
         if order:
             try:
                 await send_offer_to_client(order["user_id"], order_id, offer_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Не вдалося надіслати оффер клієнту по заявці %s: %s", order_id, e)
 
         await state.finish()
         await message.answer(
@@ -285,39 +354,42 @@ def register(dp):
         order = await get_order_row(order_id)
 
         await call.message.answer(
-            "✅ <b>Майстра обрано</b>\n\nТепер ви можете перейти в чат по заявці.",
+            "✅ <b>Майстра обрано</b>\n\n"
+            "Контакти вже відкрито. Можете написати через ✉️ або зв'язатися напряму.",
             reply_markup=client_order_actions_inline(order_id, "matched"),
         )
 
         if offer_full:
+            await share_contacts_after_choose(call, order_id, offer_full)
+
             try:
                 await dp.bot.send_message(
                     offer_full["master_user_id"],
                     f"🎉 <b>Вашу пропозицію обрано по заявці #{order_id}</b>\n\n"
-                    f"Тепер можете перейти в чат з клієнтом.",
+                    f"Контакти клієнта вже відкрито.",
                     reply_markup=selected_order_master_actions(order_id),
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Не вдалося повідомити майстра про вибір оффера %s: %s", offer_id, e)
 
         if order:
             try:
                 await dp.bot.send_message(
                     order["user_id"],
-                    f"💬 <b>Чат по заявці #{order_id} вже доступний</b>",
+                    f"📜 <b>Історія діалогу по заявці #{order_id}</b> буде доступна в кнопці історії.",
                     reply_markup=client_order_actions_inline(order_id, "matched"),
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Не вдалося повідомити клієнта по заявці %s: %s", order_id, e)
 
         await call.answer("Пропозицію обрано")
 
     # =========================
-    # CHAT FLOW
+    # DIALOG BY ORDER
     # =========================
 
     @dp.callback_query_handler(lambda c: c.data.startswith("client_chat_"), state="*")
-    async def client_chat(call: types.CallbackQuery, state: FSMContext):
+    async def client_dialog_start(call: types.CallbackQuery, state: FSMContext):
         order_id = int(call.data.split("_")[-1])
 
         order = await fetchrow(
@@ -334,26 +406,25 @@ def register(dp):
             ["matched", "in_progress"],
         )
         if not order:
-            await call.answer("Чат недоступний", show_alert=True)
+            await call.answer("Діалог недоступний", show_alert=True)
             return
 
         chat = await get_chat_for_order(order_id)
         if not chat or chat["status"] != "active" or chat["client_user_id"] != call.from_user.id:
-            await call.answer("Чат не знайдено", show_alert=True)
+            await call.answer("Діалог не знайдено", show_alert=True)
             return
 
-        await open_chat_for_user(
+        await start_dialog_write(
             call,
             state,
             order_id=order_id,
             role="client",
             target_user_id=chat["master_user_id"],
             chat_id=chat["id"],
-            is_client=True,
         )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("master_chat_open_"), state="*")
-    async def master_chat(call: types.CallbackQuery, state: FSMContext):
+    async def master_dialog_start(call: types.CallbackQuery, state: FSMContext):
         order_id = int(call.data.split("_")[-1])
 
         order = await fetchrow(
@@ -369,24 +440,23 @@ def register(dp):
             ["matched", "in_progress"],
         )
         if not order:
-            await call.answer("Чат недоступний", show_alert=True)
+            await call.answer("Діалог недоступний", show_alert=True)
             return
 
         chat = await get_chat_for_order(order_id)
         if not chat or chat["status"] != "active" or chat["master_user_id"] != call.from_user.id:
-            await call.answer("Чат не знайдено", show_alert=True)
+            await call.answer("Діалог не знайдено", show_alert=True)
             return
 
         await touch_master_presence(call.from_user.id)
 
-        await open_chat_for_user(
+        await start_dialog_write(
             call,
             state,
             order_id=order_id,
             role="master",
             target_user_id=chat["client_user_id"],
             chat_id=chat["id"],
-            is_client=False,
         )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("chat_history_"), state="*")
@@ -395,7 +465,7 @@ def register(dp):
 
         chat = await get_chat_for_order(order_id)
         if not chat:
-            await call.answer("Чат не знайдено", show_alert=True)
+            await call.answer("Історію не знайдено", show_alert=True)
             return
 
         if call.from_user.id not in (chat["client_user_id"], chat["master_user_id"]):
@@ -407,26 +477,36 @@ def register(dp):
         await call.answer()
 
     @dp.message_handler(lambda m: m.text == "📜 Історія", state=ChatFlow.message)
-    async def history_from_chat(message: types.Message, state: FSMContext):
+    async def history_from_dialog(message: types.Message, state: FSMContext):
         data = await state.get_data()
         msgs = await get_chat_history(data["order_id"], 30)
         await send_chat_history(dp.bot, message.chat.id, data["order_id"], msgs)
 
     @dp.message_handler(lambda m: m.text == "❌ Закрити чат", state=ChatFlow.message)
-    async def close_chat_reply(message: types.Message, state: FSMContext):
+    async def close_dialog_mode(message: types.Message, state: FSMContext):
         await state.finish()
         await message.answer(
-            "💬 <b>Чат закрито</b>\n\nПовертаю вас у головне меню.",
+            "✋ <b>Режим написання закрито</b>\n\n"
+            "Щоб написати ще раз — натисніть ✉️ по заявці.",
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
 
     @dp.message_handler(content_types=types.ContentTypes.ANY, state=ChatFlow.message)
-    async def relay_chat(message: types.Message, state: FSMContext):
+    async def relay_dialog_message(message: types.Message, state: FSMContext):
         data = await state.get_data()
         target_id = data["target_user_id"]
         role = data["chat_role"]
         order_id = data["order_id"]
         chat_id = data["chat_id"]
+
+        chat = await get_chat_for_order(order_id)
+        if not chat or chat["status"] != "active":
+            await state.finish()
+            await message.answer(
+                "Цей діалог уже недоступний.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
 
         try:
             if role == "master":
@@ -449,7 +529,11 @@ def register(dp):
                     caption=chat_media_caption(order_id, role, caption, "📷"),
                     reply_markup=exit_chat_inline(),
                 )
-                await message.answer("📷 <b>Фото надіслано</b>", reply_markup=chat_reply_kb())
+                await state.finish()
+                await message.answer(
+                    "✅ <b>Фото надіслано</b>\n\nЩоб написати ще — знову натисніть ✉️ по заявці.",
+                    reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+                )
                 return
 
             if message.video:
@@ -469,7 +553,11 @@ def register(dp):
                     caption=chat_media_caption(order_id, role, caption, "📹"),
                     reply_markup=exit_chat_inline(),
                 )
-                await message.answer("📹 <b>Відео надіслано</b>", reply_markup=chat_reply_kb())
+                await state.finish()
+                await message.answer(
+                    "✅ <b>Відео надіслано</b>\n\nЩоб написати ще — знову натисніть ✉️ по заявці.",
+                    reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+                )
                 return
 
             text = normalize_text(message.text or "", 1500)
@@ -494,9 +582,14 @@ def register(dp):
                 chat_text_message(order_id, role, text),
                 reply_markup=exit_chat_inline(),
             )
-            await message.answer("✅ <b>Повідомлення надіслано</b>", reply_markup=chat_reply_kb())
+            await state.finish()
+            await message.answer(
+                "✅ <b>Повідомлення надіслано</b>\n\nЩоб написати ще — знову натисніть ✉️ по заявці.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
 
-        except Exception:
+        except Exception as e:
+            logger.warning("Помилка пересилки повідомлення по заявці %s: %s", order_id, e)
             await message.answer(
                 "Не вдалося переслати повідомлення. Спробуйте ще раз.",
                 reply_markup=chat_reply_kb(),
