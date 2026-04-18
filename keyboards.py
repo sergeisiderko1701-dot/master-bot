@@ -68,10 +68,6 @@ def master_menu_kb():
     return kb
 
 
-# =========================
-# ADMIN
-# =========================
-
 def admin_menu_kb():
     kb = _reply_kb()
     kb.add(KeyboardButton("👷 База майстрів"))
@@ -82,8 +78,19 @@ def admin_menu_kb():
     return kb
 
 
+def admin_orders_filter_kb():
+    kb = _reply_kb()
+    kb.add(KeyboardButton("📋 Усі заявки"))
+    kb.add(KeyboardButton("🆕 Нові"), KeyboardButton("📬 Є пропозиції"))
+    kb.add(KeyboardButton("🤝 Обрано майстра"), KeyboardButton("🛠 В роботі"))
+    kb.add(KeyboardButton("✅ Завершені"), KeyboardButton("❌ Скасовані"))
+    kb.add(KeyboardButton("⌛ Прострочені"))
+    kb.add(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
+    return kb
+
+
 # =========================
-# MASTER REGISTRATION
+# MASTER REGISTRATION / PROFILE
 # =========================
 
 def master_categories_inline_kb():
@@ -107,7 +114,7 @@ def edit_profile_inline_kb():
 
 
 # =========================
-# ORDERS
+# OFFERS / ORDERS
 # =========================
 
 def order_card_master_actions(order_id: int):
@@ -121,10 +128,6 @@ def offer_select_inline(offer_id: int):
     kb.add(InlineKeyboardButton("✅ Обрати цього майстра", callback_data=f"choose_offer_{offer_id}"))
     return kb
 
-
-# =========================
-# CLIENT ORDER ACTIONS (НОВИЙ UX)
-# =========================
 
 def client_order_actions_inline(order_id: int, status: str):
     kb = _inline_kb(row_width=1)
@@ -143,10 +146,6 @@ def client_order_actions_inline(order_id: int, status: str):
     return kb
 
 
-# =========================
-# MASTER ACTIVE ORDER ACTIONS (НОВИЙ UX)
-# =========================
-
 def selected_order_master_actions(order_id: int):
     kb = _inline_kb(row_width=1)
     kb.add(
@@ -160,7 +159,79 @@ def selected_order_master_actions(order_id: int):
 
 
 # =========================
-# SUPPORT / CHAT
+# ADMIN INLINE
+# =========================
+
+def admin_master_card_inline(master_id: int, status: str):
+    kb = _inline_kb(row_width=1)
+
+    if status == "approved":
+        kb.add(InlineKeyboardButton("🚫 Заблокувати", callback_data=f"admin_block_master_{master_id}"))
+    elif status == "blocked":
+        kb.add(InlineKeyboardButton("✅ Розблокувати", callback_data=f"admin_unblock_master_{master_id}"))
+
+    kb.add(InlineKeyboardButton("🗑 Видалити майстра", callback_data=f"admin_delete_master_{master_id}"))
+    return kb
+
+
+def admin_pending_master_inline(master_id: int):
+    kb = _inline_kb(row_width=1)
+    kb.add(
+        InlineKeyboardButton("✅ Підтвердити", callback_data=f"admin_approve_master_{master_id}"),
+        InlineKeyboardButton("❌ Відхилити", callback_data=f"admin_reject_master_{master_id}"),
+    )
+    return kb
+
+
+def admin_order_actions_inline(order_id: int, status: str):
+    kb = _inline_kb(row_width=1)
+
+    kb.add(InlineKeyboardButton("📄 Деталі заявки", callback_data=f"admin_order_detail_{order_id}"))
+    kb.add(InlineKeyboardButton("📜 Історія діалогу", callback_data=f"chat_history_{order_id}"))
+
+    if status not in CLOSED_ORDER_STATUSES:
+        kb.add(InlineKeyboardButton("❌ Закрити як неактуальну", callback_data=f"admin_expire_order_{order_id}"))
+
+    if status == "matched":
+        kb.add(InlineKeyboardButton("🛠 Позначити 'в роботі'", callback_data=f"admin_progress_order_{order_id}"))
+
+    if status in {"matched", "in_progress"}:
+        kb.add(InlineKeyboardButton("🏁 Завершити", callback_data=f"admin_done_order_{order_id}"))
+
+    if status in {"offered", "matched", "in_progress"}:
+        kb.add(InlineKeyboardButton("🔄 Повернути в нові", callback_data=f"admin_reset_order_{order_id}"))
+
+    return kb
+
+
+# =========================
+# HELPERS
+# =========================
+
+def pagination_inline(prefix: str, page: int, has_prev: bool, has_next: bool):
+    kb = _inline_kb(row_width=2)
+    row = []
+
+    if has_prev:
+        row.append(InlineKeyboardButton("⬅️ Попередня", callback_data=f"{prefix}_{page-1}"))
+    if has_next:
+        row.append(InlineKeyboardButton("Наступна ➡️", callback_data=f"{prefix}_{page+1}"))
+
+    if row:
+        kb.add(*row)
+        return kb
+
+    return None
+
+
+def support_reply_inline(user_id: int):
+    kb = _inline_kb(row_width=1)
+    kb.add(InlineKeyboardButton("↩️ Відповісти", callback_data=f"support_reply_{user_id}"))
+    return kb
+
+
+# =========================
+# DIALOG / MESSAGE MODE
 # =========================
 
 def exit_chat_inline():
