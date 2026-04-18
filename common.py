@@ -166,7 +166,7 @@ def register(dp):
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
 
-    @dp.message_handler(lambda m: m.text in BACK_BUTTONS, state="*")
+    @dp.message_handler(lambda m: (m.text or "").strip() in BACK_BUTTONS, state="*")
     async def back_handler(message: types.Message, state: FSMContext):
         await state.finish()
         await update_master_presence_if_needed(message.from_user.id)
@@ -185,11 +185,10 @@ def register(dp):
 
         current = await state.get_state()
 
+        # Головне виправлення:
+        # якщо активного state немає, нічого не відповідаємо,
+        # щоб не дублювати відповіді інших handlers
         if not current:
-            await message.answer(
-                "Скористайтесь меню нижче.",
-                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
-            )
             return
 
         await message.answer(
