@@ -49,7 +49,6 @@ async def init_db(database_url: str):
         );
         """)
 
-        # якщо таблиця вже створена раніше — просто додасть колонку
         await conn.execute("""
         ALTER TABLE orders
         ADD COLUMN IF NOT EXISTS client_phone TEXT;
@@ -79,6 +78,7 @@ async def init_db(database_url: str):
         );
         """)
 
+        # Актуальна схема під repositories.py / offers.py
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS chat_messages (
             id SERIAL PRIMARY KEY,
@@ -86,11 +86,43 @@ async def init_db(database_url: str):
             order_id INTEGER,
             sender_user_id BIGINT,
             sender_role TEXT,
-            message_text TEXT,
-            media_type TEXT,
-            media_file_id TEXT,
+            message_type TEXT,
+            text TEXT,
+            file_id TEXT,
             created_at BIGINT
         );
+        """)
+
+        # Сумісність зі старою версією схеми, якщо таблиця вже існувала
+        await conn.execute("""
+        ALTER TABLE chat_messages
+        ADD COLUMN IF NOT EXISTS message_type TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE chat_messages
+        ADD COLUMN IF NOT EXISTS text TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE chat_messages
+        ADD COLUMN IF NOT EXISTS file_id TEXT;
+        """)
+
+        # Старі поля лишаємо тимчасово, щоб не ризикувати даними
+        await conn.execute("""
+        ALTER TABLE chat_messages
+        ADD COLUMN IF NOT EXISTS message_text TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE chat_messages
+        ADD COLUMN IF NOT EXISTS media_type TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE chat_messages
+        ADD COLUMN IF NOT EXISTS media_file_id TEXT;
         """)
 
         await conn.execute("""
@@ -155,4 +187,6 @@ async def init_db(database_url: str):
 
 
 def get_pool():
+    if _pool is None:
+        raise RuntimeError("Database pool is not initialized")
     return _pool
