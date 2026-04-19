@@ -6,7 +6,7 @@ from aiogram.dispatcher import FSMContext
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 from config import settings
-from constants import CATEGORY_LABEL_TO_VALUE, category_label
+from constants import CATEGORY_LABEL_TO_VALUE
 from keyboards import (
     back_menu_kb,
     categories_kb,
@@ -25,7 +25,7 @@ from repositories import (
     list_order_offers,
     set_cooldown,
 )
-from services import notify_admin_about_order, notify_masters_about_order, send_master_card, send_order_card
+from services import notify_admin_about_order, notify_masters_about_order, send_order_card
 from states import ClientCreateOrder
 from ui_texts import (
     ask_district_text,
@@ -376,52 +376,6 @@ def register(dp):
             order_created_text(),
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
-
-    @dp.message_handler(lambda m: m.text == "👷 Переглянути майстрів", state="*")
-    async def view_masters(message: types.Message, state: FSMContext):
-        data = await state.get_data()
-        category = data.get("client_category")
-
-        if not category:
-            await message.answer(
-                "Спочатку оберіть категорію.",
-                reply_markup=categories_kb(),
-            )
-            return
-
-        rows = await fetch(
-            """
-            SELECT *
-            FROM masters
-            WHERE status='approved' AND category=$1
-            ORDER BY rating DESC, reviews_count DESC, name ASC
-            LIMIT 20
-            """,
-            category,
-        )
-
-        if not rows:
-            await message.answer(
-                "У цій категорії поки немає підтверджених майстрів.",
-                reply_markup=client_actions_kb(),
-            )
-            return
-
-        await message.answer(
-            f"👷 Майстри в категорії: {category_label(category)}",
-            reply_markup=client_actions_kb(),
-        )
-
-        for row in rows:
-            try:
-                await send_master_card(
-                    dp.bot,
-                    message.chat.id,
-                    row,
-                    title="👷 Майстер",
-                )
-            except Exception:
-                continue
 
     @dp.message_handler(lambda m: m.text == "📦 Мої заявки", state="*")
     async def my_orders(message: types.Message, state: FSMContext):
