@@ -11,10 +11,12 @@ from keyboards import (
     back_menu_kb,
     categories_kb,
     client_actions_kb,
+    client_order_actions_inline,
     main_menu_kb,
     offer_select_inline,
 )
 from repositories import (
+    cancel_order,
     client_active_orders_count,
     create_order,
     fetch,
@@ -42,7 +44,11 @@ logger = logging.getLogger(__name__)
 
 BACK_BUTTONS = {"⬅️ Назад", "Назад", "🔙 Назад"}
 SKIP_WORDS = {"пропустити", "skip", "-"}
-CHANGE_CATEGORY_BUTTONS = {"🔄 Змінити спеціальність", "🔧 Змінити спеціальність"}
+
+CHANGE_CATEGORY_BUTTONS = {
+    "🔄 Змінити спеціальність",
+    "🔧 Змінити спеціальність",
+}
 
 BAD_WORDS = {
     "тест",
@@ -72,7 +78,7 @@ def normalize_phone(value: str) -> str:
 
 
 def is_valid_phone(value: str) -> bool:
-    return bool(re.fullmatch(r"\+380\d{9}", value))
+    return bool(re.fullmatch(r"\+380\d{9}", value or ""))
 
 
 def request_contact_kb():
@@ -343,21 +349,13 @@ def register(dp):
             """
             SELECT user_id, category, status
             FROM masters
-            WHERE status='approved'
-            """
+            WHERE status='approved' AND category=$1
+            """,
+            data["client_category"],
         )
 
-        order_category = (data["client_category"] or "").strip()
-        filtered_masters = []
-
-        for master in masters:
-            master_category = (master["category"] or "").strip()
-            if master_category == order_category:
-                filtered_masters.append(master)
-
-        logger.info("ORDER ID=%s CATEGORY=%s", order_id, order_category)
-        logger.info("APPROVED MASTERS FOUND=%s", len(masters))
-        logger.info("FILTERED MASTERS FOR ORDER=%s", len(filtered_masters))
+        logger.info("ORDER ID=%s CATEGORY=%s", order_id, data["client_category"])
+        logger.info("FILTERED MASTERS FOR ORDER=%s", len(masters))
 
         try:
             await notify_admin_about_order(dp.bot, settings.admin_id, order_row)
@@ -365,12 +363,12 @@ def register(dp):
             logger.warning("Помилка повідомлення адміну по заявці %s: %s", order_id, e)
 
         try:
-            await notify_masters_about_order(dp.bot, order_row, filtered_masters)
+            await notify_masters_about_order(dp.bot, order_row, masters)
         except Exception as e:
             logger.warning("Помилка розсилки майстрам по заявці %s: %s", order_id, e)
 
         await state.finish()
-        await state.update_data(client_category=order_category)
+        await state.update_data(client_category=data["client_category"])
 
         await message.answer(
             order_created_text(),
@@ -392,8 +390,6 @@ def register(dp):
             "📦 Ваші заявки:",
             reply_markup=client_actions_kb(),
         )
-
-        from keyboards import client_order_actions_inline
 
         for row in rows[:20]:
             try:
@@ -452,3 +448,32 @@ def register(dp):
             )
 
         await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("client_cancel_"), state="*")
+    async def client_cancel_order(call: types.CallbackQuery, state: FSMContext):
+        order_id = int(call.data.split("_")[-1])
+
+        order = await fetchrow(
+            """
+            SELECT *
+            FROM orders
+            WHERE id=$1
+              AND user_id=$2
+              AND status = ANY($3::text[])
+            """,
+            order_id,
+            call.from_user.id,
+            ["new", "offered", "matched"],
+        )
+
+        if not order:
+            await call.answer("Цю заявку вже не можна скасувати.", show_alert=True)
+            return
+
+        await cancel_order(order_id)
+
+        await call.message.answer(
+            f"❌ <b>Заявку #{order_id} скасовано</b>",
+            reply_markup=client_actions_kb(),
+        )
+        await call.answer("Готово")
