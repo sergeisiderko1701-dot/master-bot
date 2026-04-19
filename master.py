@@ -42,7 +42,7 @@ SKIP_WORDS = {"пропустити", "skip", "-"}
 def register(dp):
     async def show_master_profile(message: types.Message, master_row):
         text = (
-            f"👤 <b>Ваш профіль майстра</b>\n\n"
+            f"👷 <b>Ваш профіль майстра</b>\n\n"
             f"👤 Ім'я: {master_row['name']}\n"
             f"🔧 Категорія: {category_label(master_row['category'])}\n"
             f"📍 Район: {master_row['district'] or '-'}\n"
@@ -51,7 +51,11 @@ def register(dp):
             f"🛠 Досвід: {master_row['experience'] or '-'}\n"
             f"⭐ Рейтинг: {float(master_row['rating']):.2f}\n"
             f"💬 Відгуків: {master_row['reviews_count']}\n"
-            f"🟢 Статус: {master_row['availability']}"
+            f"🟢 Статус: {master_row['availability']}\n\n"
+            f"ℹ️ <b>Пам'ятка</b>\n"
+            f"• нові заявки надходять тільки у вашу категорію\n"
+            f"• контакти клієнта відкриваються після того, як клієнт обере вас\n"
+            f"• якщо заявок немає — це не помилка, просто зараз немає нових звернень"
         )
 
         if master_row["photo"]:
@@ -80,21 +84,26 @@ def register(dp):
 
         if master and master["status"] == "pending":
             await message.answer(
-                "Ваша заявка вже на модерації.",
+                "⏳ <b>Ваша анкета вже на перевірці</b>\n\n"
+                "Поки адміністратор не підтвердить профіль, нові заявки не надходитимуть.",
                 reply_markup=back_menu_kb(),
             )
             return
 
         if master and master["status"] == "blocked":
             await message.answer(
-                "Ваш профіль майстра заблокований. Зверніться в підтримку.",
+                "🚫 <b>Ваш профіль майстра заблокований</b>\n\n"
+                "Зверніться в підтримку, якщо вважаєте це помилкою.",
                 reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
             )
             return
 
         await MasterRegistration.name.set()
         await message.answer(
-            "👤 <b>Реєстрація майстра</b>\n\nВведіть ваше ім'я:",
+            "👷 <b>Реєстрація майстра</b>\n\n"
+            "Після заповнення анкети адміністратор перевірить профіль.\n"
+            "Після підтвердження ви почнете отримувати заявки у своїй категорії.\n\n"
+            "Введіть ваше ім'я:",
             reply_markup=back_menu_kb(),
         )
 
@@ -132,7 +141,8 @@ def register(dp):
         await state.update_data(name=name)
         await MasterRegistration.category.set()
         await message.answer(
-            "🔧 Оберіть спеціальність кнопкою:",
+            "🔧 <b>Оберіть спеціальність</b>\n\n"
+            "Саме в цій категорії ви будете отримувати нові заявки.",
             reply_markup=back_menu_kb(),
         )
         await message.answer("Категорії:", reply_markup=master_categories_inline_kb())
@@ -163,7 +173,8 @@ def register(dp):
         await state.update_data(district=district)
         await MasterRegistration.description.set()
         await message.answer(
-            "🧾 <b>Коротко про себе</b>\n\nНапишіть кілька речень про ваш досвід і спеціалізацію.",
+            "🧾 <b>Коротко про себе</b>\n\n"
+            "Напишіть кілька речень про ваш досвід і спеціалізацію.",
             reply_markup=back_menu_kb(),
         )
 
@@ -180,7 +191,8 @@ def register(dp):
         await state.update_data(description=description)
         await MasterRegistration.experience.set()
         await message.answer(
-            "🛠 <b>Досвід роботи</b>\n\nНапишіть, з чим саме допомагаєте клієнтам.",
+            "🛠 <b>Досвід роботи</b>\n\n"
+            "Напишіть, з чим саме допомагаєте клієнтам.",
             reply_markup=back_menu_kb(),
         )
 
@@ -197,7 +209,8 @@ def register(dp):
         await state.update_data(experience=experience)
         await MasterRegistration.phone.set()
         await message.answer(
-            "📞 <b>Контактний телефон</b>\n\nВведіть номер у зручному форматі.",
+            "📞 <b>Контактний телефон</b>\n\n"
+            "Цей номер побачить тільки клієнт, який обере вас.",
             reply_markup=back_menu_kb(),
         )
 
@@ -214,7 +227,8 @@ def register(dp):
         await state.update_data(phone=phone)
         await MasterRegistration.photo.set()
         await message.answer(
-            "📸 <b>Фото профілю</b>\n\nНадішліть фото або напишіть <b>пропустити</b>.",
+            "📸 <b>Фото профілю</b>\n\n"
+            "Надішліть фото або напишіть <b>пропустити</b>.",
             reply_markup=back_menu_kb(),
         )
 
@@ -234,7 +248,6 @@ def register(dp):
         data["user_id"] = message.from_user.id
         data["photo"] = photo
 
-        # category тут уже гарантовано: plumber/electrician/repair
         await create_or_update_master(data)
 
         master_row = await fetchrow(
@@ -254,7 +267,9 @@ def register(dp):
 
         await state.finish()
         await message.answer(
-            "⏳ <b>Заявку надіслано</b>\n\nПісля перевірки адміністратор активує ваш профіль.",
+            "⏳ <b>Анкету надіслано</b>\n\n"
+            "Після перевірки адміністратор активує ваш профіль.\n"
+            "Після цього ви почнете отримувати заявки у своїй категорії.",
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
 
@@ -344,7 +359,12 @@ def register(dp):
         master = await approved_master_row(message.from_user.id)
         if not master:
             await message.answer(
-                "❌ Ви не підтверджений майстер.",
+                "❌ <b>Ви ще не можете отримувати заявки</b>\n\n"
+                "Можливі причини:\n"
+                "• профіль ще не підтверджений\n"
+                "• профіль заблокований\n"
+                "• ви ще не завершили реєстрацію\n\n"
+                "Якщо ви вже подавали анкету — дочекайтесь перевірки адміністратора.",
                 reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
             )
             return
@@ -354,13 +374,19 @@ def register(dp):
         rows = await list_new_orders_for_master(master["category"])
         if not rows:
             await message.answer(
-                "Наразі нових заявок у вашій категорії немає.",
+                f"📭 <b>Нових заявок поки немає</b>\n\n"
+                f"Категорія: {category_label(master['category'])}\n\n"
+                "Ми покажемо вам нові заявки, щойно вони з’являться.\n\n"
+                "ℹ️ Щоб отримувати заявки:\n"
+                "• профіль має бути підтверджений\n"
+                "• категорія має збігатися із заявкою\n"
+                "• бажано відкрити бот через /start",
                 reply_markup=master_menu_kb(),
             )
             return
 
         await message.answer(
-            f"📦 Нові заявки ({category_label(master['category'])}):",
+            f"📦 <b>Нові заявки</b>\n\nКатегорія: {category_label(master['category'])}",
             reply_markup=master_menu_kb(),
         )
 
@@ -378,7 +404,7 @@ def register(dp):
             except Exception:
                 continue
 
-    @dp.message_handler(lambda m: m.text == "💬 Активні чати", state="*")
+    @dp.message_handler(lambda m: m.text == "💬 Активні заявки", state="*")
     async def active_orders(message: types.Message, state: FSMContext):
         master = await approved_master_row(message.from_user.id)
         if not master:
@@ -393,13 +419,15 @@ def register(dp):
         rows = await list_active_orders_for_master(message.from_user.id)
         if not rows:
             await message.answer(
-                "У вас немає активних заявок.",
+                "📭 <b>У вас немає активних заявок</b>\n\n"
+                "Коли клієнт обере вашу пропозицію, вона з’явиться тут.\n"
+                "Після вибору клієнтом вам відкриються його контакти.",
                 reply_markup=master_menu_kb(),
             )
             return
 
         await message.answer(
-            "✅ Ваші активні заявки:",
+            "✅ <b>Ваші активні заявки</b>",
             reply_markup=master_menu_kb(),
         )
 
