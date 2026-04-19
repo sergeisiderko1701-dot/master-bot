@@ -6,9 +6,14 @@ _pool = None
 
 async def init_db(database_url: str):
     global _pool
-    _pool = await asyncpg.create_pool(database_url)
+
+    if _pool is None:
+        _pool = await asyncpg.create_pool(database_url)
 
     async with _pool.acquire() as conn:
+        # =========================
+        # MASTERS
+        # =========================
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS masters (
             id SERIAL PRIMARY KEY,
@@ -28,6 +33,9 @@ async def init_db(database_url: str):
         );
         """)
 
+        # =========================
+        # ORDERS
+        # =========================
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id SERIAL PRIMARY KEY,
@@ -55,6 +63,29 @@ async def init_db(database_url: str):
         """)
 
         await conn.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS status_reason_code TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS status_reason_text TEXT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS created_at BIGINT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS updated_at BIGINT;
+        """)
+
+        # =========================
+        # OFFERS
+        # =========================
+        await conn.execute("""
         CREATE TABLE IF NOT EXISTS offers (
             id SERIAL PRIMARY KEY,
             order_id INTEGER,
@@ -67,6 +98,9 @@ async def init_db(database_url: str):
         );
         """)
 
+        # =========================
+        # CHATS
+        # =========================
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS chats (
             id SERIAL PRIMARY KEY,
@@ -78,7 +112,10 @@ async def init_db(database_url: str):
         );
         """)
 
+        # =========================
+        # CHAT_MESSAGES
         # Актуальна схема під repositories.py / offers.py
+        # =========================
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS chat_messages (
             id SERIAL PRIMARY KEY,
@@ -93,7 +130,7 @@ async def init_db(database_url: str):
         );
         """)
 
-        # Сумісність зі старою версією схеми, якщо таблиця вже існувала
+        # Сумісність зі старими версіями схеми
         await conn.execute("""
         ALTER TABLE chat_messages
         ADD COLUMN IF NOT EXISTS message_type TEXT;
@@ -109,7 +146,7 @@ async def init_db(database_url: str):
         ADD COLUMN IF NOT EXISTS file_id TEXT;
         """)
 
-        # Старі поля лишаємо тимчасово, щоб не ризикувати даними
+        # Старі поля залишаємо тимчасово для сумісності / старих даних
         await conn.execute("""
         ALTER TABLE chat_messages
         ADD COLUMN IF NOT EXISTS message_text TEXT;
@@ -125,6 +162,9 @@ async def init_db(database_url: str):
         ADD COLUMN IF NOT EXISTS media_file_id TEXT;
         """)
 
+        # =========================
+        # COMPLAINTS
+        # =========================
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS complaints (
             id SERIAL PRIMARY KEY,
@@ -137,6 +177,9 @@ async def init_db(database_url: str):
         );
         """)
 
+        # =========================
+        # SUPPORT_MESSAGES
+        # =========================
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS support_messages (
             id SERIAL PRIMARY KEY,
@@ -146,6 +189,9 @@ async def init_db(database_url: str):
         );
         """)
 
+        # =========================
+        # ORDER_EVENTS
+        # =========================
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS order_events (
             id SERIAL PRIMARY KEY,
@@ -161,6 +207,9 @@ async def init_db(database_url: str):
         );
         """)
 
+        # =========================
+        # AUDIT_LOGS
+        # =========================
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS audit_logs (
             id SERIAL PRIMARY KEY,
@@ -175,6 +224,9 @@ async def init_db(database_url: str):
         );
         """)
 
+        # =========================
+        # USER_COOLDOWNS
+        # =========================
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS user_cooldowns (
             id SERIAL PRIMARY KEY,
@@ -183,6 +235,187 @@ async def init_db(database_url: str):
             last_at BIGINT NOT NULL,
             UNIQUE (user_id, action_key)
         );
+        """)
+
+        # =========================
+        # INDEXES: MASTERS
+        # =========================
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_masters_user_id
+        ON masters(user_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_masters_status
+        ON masters(status);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_masters_category
+        ON masters(category);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_masters_status_category
+        ON masters(status, category);
+        """)
+
+        # =========================
+        # INDEXES: ORDERS
+        # =========================
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orders_user_id
+        ON orders(user_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orders_status
+        ON orders(status);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orders_category
+        ON orders(category);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orders_selected_master_id
+        ON orders(selected_master_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orders_category_status
+        ON orders(category, status);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orders_user_status
+        ON orders(user_id, status);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orders_created_at
+        ON orders(created_at DESC);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orders_updated_at
+        ON orders(updated_at DESC);
+        """)
+
+        # =========================
+        # INDEXES: OFFERS
+        # =========================
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_offers_order_id
+        ON offers(order_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_offers_master_user_id
+        ON offers(master_user_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_offers_status
+        ON offers(status);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_offers_order_status
+        ON offers(order_id, status);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_offers_order_master_status
+        ON offers(order_id, master_user_id, status);
+        """)
+
+        # =========================
+        # INDEXES: CHATS
+        # =========================
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chats_order_id
+        ON chats(order_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chats_status
+        ON chats(status);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chats_client_user_id
+        ON chats(client_user_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chats_master_user_id
+        ON chats(master_user_id);
+        """)
+
+        # =========================
+        # INDEXES: CHAT_MESSAGES
+        # =========================
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id
+        ON chat_messages(chat_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_order_id
+        ON chat_messages(order_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at
+        ON chat_messages(created_at DESC);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_order_id_id_desc
+        ON chat_messages(order_id, id DESC);
+        """)
+
+        # =========================
+        # INDEXES: COMPLAINTS / SUPPORT
+        # =========================
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_complaints_order_id
+        ON complaints(order_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_complaints_from_user_id
+        ON complaints(from_user_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_complaints_against_user_id
+        ON complaints(against_user_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_support_messages_from_user_id
+        ON support_messages(from_user_id);
+        """)
+
+        # =========================
+        # INDEXES: ORDER_EVENTS / AUDIT / COOLDOWNS
+        # =========================
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_order_events_order_id
+        ON order_events(order_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_audit_logs_entity
+        ON audit_logs(entity_type, entity_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_cooldowns_user_action
+        ON user_cooldowns(user_id, action_key);
         """)
 
 
