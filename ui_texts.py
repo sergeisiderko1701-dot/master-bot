@@ -144,6 +144,39 @@ def offer_card_text(offer) -> str:
     )
 
 
+def client_master_selected_text(master_name: str, phone: str, rating=None, reviews_count=None, eta: str = None) -> str:
+    rating_line = f"⭐ <b>Рейтинг:</b> {float(rating):.2f}\n" if rating is not None else ""
+    reviews_line = f"💬 <b>Відгуків:</b> {reviews_count}\n" if reviews_count is not None else ""
+    eta_line = f"⏱ <b>Коли зможе:</b> {eta}\n" if eta else ""
+
+    return (
+        "🎉 <b>Ви обрали майстра</b>\n\n"
+        "Ми відкрили контакти для зв'язку.\n\n"
+        f"👷 <b>Майстер:</b> {master_name}\n"
+        f"📞 <b>Телефон:</b> {phone or '—'}\n"
+        f"{rating_line}"
+        f"{reviews_line}"
+        f"{eta_line}\n"
+        "Тепер ви можете:\n"
+        "• домовитись про час і деталі\n"
+        "• написати майстру через бот\n"
+        "• зателефонувати напряму\n\n"
+        "Якщо все пройде добре — після виконання роботи завершіть заявку та залиште оцінку.\n"
+        "Якщо виникне проблема — скористайтесь кнопкою скарги."
+    )
+
+
+def master_selected_for_master_text(order_id: int) -> str:
+    return (
+        f"🎉 <b>Вашу пропозицію обрано по заявці #{order_id}</b>\n\n"
+        "Контакти клієнта вже відкрито.\n\n"
+        "Тепер ви можете:\n"
+        "• зв'язатися з клієнтом напряму\n"
+        "• написати через бот\n"
+        "• після виконання натиснути <b>Завершити заявку</b>"
+    )
+
+
 def chat_open_text(order_id: int, is_client: bool) -> str:
     other = "майстру 👷" if is_client else "клієнту 👤"
     return (
