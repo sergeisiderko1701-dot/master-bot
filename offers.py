@@ -118,7 +118,7 @@ def register(dp):
     async def share_contacts_after_choose(call: types.CallbackQuery, order_id: int, offer_full):
         order_row = await get_order_row(order_id)
 
-        # Клієнту -> контакти майстра + красивий підсумок
+        # Клієнту: одне повідомлення з контактами майстра + кнопки
         try:
             await dp.bot.send_message(
                 call.from_user.id,
@@ -138,11 +138,14 @@ def register(dp):
                 e,
             )
 
-        # Майстру -> контакти клієнта
+        # Майстру: одне повідомлення з фактом вибору + контактами клієнта + кнопки
         try:
             await dp.bot.send_message(
                 offer_full["master_user_id"],
-                build_client_contact_text(call.from_user, order_row),
+                (
+                    f"{master_selected_for_master_text(order_id)}\n\n"
+                    f"{build_client_contact_text(call.from_user, order_row)}"
+                ),
                 reply_markup=selected_order_master_actions(order_id),
             )
         except Exception as e:
@@ -378,37 +381,9 @@ def register(dp):
 
         offer_full = await get_offer_full_row(offer_id)
         order_id = int(selected_offer["order_id"])
-        order = await get_order_row(order_id)
 
         if offer_full:
             await share_contacts_after_choose(call, order_id, offer_full)
-
-            try:
-                await dp.bot.send_message(
-                    offer_full["master_user_id"],
-                    master_selected_for_master_text(order_id),
-                    reply_markup=selected_order_master_actions(order_id),
-                )
-            except Exception as e:
-                logger.warning(
-                    "Не вдалося повідомити майстра про вибір оффера %s: %s",
-                    offer_id,
-                    e,
-                )
-
-        if order:
-            try:
-                await dp.bot.send_message(
-                    order["user_id"],
-                    f"📜 <b>Історія діалогу по заявці #{order_id}</b> доступна через кнопку історії.",
-                    reply_markup=client_order_actions_inline(order_id, "matched"),
-                )
-            except Exception as e:
-                logger.warning(
-                    "Не вдалося повідомити клієнта по заявці %s: %s",
-                    order_id,
-                    e,
-                )
 
         await call.answer("Пропозицію обрано")
 
