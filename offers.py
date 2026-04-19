@@ -26,6 +26,7 @@ from repositories import (
     get_chat_history,
     get_cooldown,
     get_order_row,
+    list_order_offers,
     master_active_orders_count,
     rate_order,
     refuse_order,
@@ -83,7 +84,7 @@ def register(dp):
 
         await dp.bot.send_message(
             client_user_id,
-            f"📬 <b>Нова пропозиція по заявці #{order_id}</b>",
+            f"📬 <b>Нова пропозиція за заявкою #{order_id}</b>",
         )
         await dp.bot.send_message(
             client_user_id,
@@ -98,9 +99,9 @@ def register(dp):
         except Exception:
             return default
 
-    def _after_dialog_markup(role: str, order_id: int):
+    def _after_dialog_markup(role: str, order_id: int, status: str = "matched"):
         if role == "client":
-            return client_order_actions_inline(order_id, "matched")
+            return client_order_actions_inline(order_id, status)
         return selected_order_master_actions(order_id)
 
     def _after_dialog_text(role: str, order_id: int) -> str:
@@ -377,7 +378,7 @@ def register(dp):
                 await send_offer_to_client(order["user_id"], order_id, offer_id)
             except Exception as e:
                 logger.warning(
-                    "Не вдалося надіслати оффер клієнту по заявці %s: %s",
+                    "Не вдалося надіслати оффер клієнту за заявкою %s: %s",
                     order_id,
                     e,
                 )
@@ -447,7 +448,7 @@ def register(dp):
                 reply_markup=rating_inline(order_id),
             )
         except Exception as e:
-            logger.warning("Не вдалося надіслати клієнту запит на рейтинг по заявці %s: %s", order_id, e)
+            logger.warning("Не вдалося надіслати клієнту запит на рейтинг за заявкою %s: %s", order_id, e)
 
         await call.answer("Заявку завершено")
 
@@ -488,7 +489,7 @@ def register(dp):
                 reply_markup=client_order_actions_inline(order_id, "offered"),
             )
         except Exception as e:
-            logger.warning("Не вдалося повідомити клієнта про відмову по заявці %s: %s", order_id, e)
+            logger.warning("Не вдалося повідомити клієнта про відмову за заявкою %s: %s", order_id, e)
 
         await call.answer("Відмову збережено")
 
@@ -615,7 +616,7 @@ def register(dp):
 
             await dp.bot.send_message(settings.admin_id, admin_text)
         except Exception as e:
-            logger.warning("Не вдалося зберегти/відправити скаргу по заявці %s: %s", order_id, e)
+            logger.warning("Не вдалося зберегти/відправити скаргу за заявкою %s: %s", order_id, e)
             await state.finish()
             await message.answer(
                 "Не вдалося надіслати скаргу. Спробуйте пізніше.",
@@ -721,7 +722,7 @@ def register(dp):
                     ),
                 )
         except Exception as e:
-            logger.warning("Не вдалося повідомити майстра про нову оцінку по заявці %s: %s", order_id, e)
+            logger.warning("Не вдалося повідомити майстра про нову оцінку за заявкою %s: %s", order_id, e)
 
         await state.finish()
         await message.answer(
@@ -948,7 +949,7 @@ def register(dp):
             )
 
         except Exception as e:
-            logger.warning("Помилка пересилки повідомлення по заявці %s: %s", order_id, e)
+            logger.warning("Помилка пересилки повідомлення за заявкою %s: %s", order_id, e)
             await message.answer(
                 "Не вдалося переслати повідомлення. Спробуйте ще раз.",
                 reply_markup=chat_reply_kb(),
