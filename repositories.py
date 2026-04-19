@@ -333,27 +333,39 @@ async def cancel_order(order_id: int):
 
 
 async def refuse_order(order_id: int):
-    await execute(
-        """
-        UPDATE orders
-        SET selected_master_id=NULL,
-            status='offered',
-            updated_at=$1
-        WHERE id=$2
-        """,
-        now_ts(),
-        order_id,
-    )
-    await close_chat(order_id)
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                UPDATE orders
+                SET selected_master_id=NULL,
+                    status='offered',
+                    updated_at=$1
+                WHERE id=$2
+                """,
+                now_ts(),
+                order_id,
+            )
+            await conn.execute(
+                "UPDATE chats SET status='closed' WHERE order_id=$1",
+                order_id,
+            )
 
 
 async def finish_order(order_id: int):
-    await execute(
-        "UPDATE orders SET status='done', updated_at=$1 WHERE id=$2",
-        now_ts(),
-        order_id,
-    )
-    await close_chat(order_id)
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "UPDATE orders SET status='done', updated_at=$1 WHERE id=$2",
+                now_ts(),
+                order_id,
+            )
+            await conn.execute(
+                "UPDATE chats SET status='closed' WHERE order_id=$1",
+                order_id,
+            )
 
 
 async def admin_stats():
@@ -595,6 +607,57 @@ async def get_chat_for_order(order_id: int):
     )
 
 
+async def create_chat_if_not_exists(order_id: int, client_user_id: int, master_user_id: int):
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            chat = await conn.fetchrow(
+                "SELECT * FROM chats WHERE order_id=$1 ORDER BY id DESC LIMIT 1 FOR UPDATE",
+                order_id,
+            )
+            if chat:
+                if (
+                    chat["client_user_id"] != client_user_id
+                    or chat["master_user_id"] != master_user_id
+                    or chat["status"] != "active"
+                ):
+                    await conn.execute(
+                        """
+                        UPDATE chats
+                        SET client_user_id=$1,
+                            master_user_id=$2,
+                            status='active'
+                        WHERE id=$3
+                        """,
+                        client_user_id,
+                        master_user_id,
+                        chat["id"],
+                    )
+                    chat = await conn.fetchrow(
+                        "SELECT * FROM chats WHERE id=$1",
+                        chat["id"],
+                    )
+                return chat
+
+            return await conn.fetchrow(
+                """
+                INSERT INTO chats (
+                    order_id,
+                    client_user_id,
+                    master_user_id,
+                    status,
+                    created_at
+                )
+                VALUES ($1,$2,$3,'active',$4)
+                RETURNING *
+                """,
+                order_id,
+                client_user_id,
+                master_user_id,
+                now_ts(),
+            )
+
+
 async def close_chat(order_id: int):
     await execute(
         "UPDATE chats SET status='closed' WHERE order_id=$1",
@@ -611,13 +674,20 @@ async def create_chat_message(
     text: Optional[str],
     file_id: Optional[str],
 ):
-    await execute(
+    return await fetchrow(
         """
         INSERT INTO chat_messages(
-            chat_id, order_id, sender_user_id, sender_role,
-            message_type, text, file_id, created_at
+            chat_id,
+            order_id,
+            sender_user_id,
+            sender_role,
+            message_type,
+            text,
+            file_id,
+            created_at
         )
         VALUES($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
         """,
         chat_id,
         order_id,
@@ -627,6 +697,24 @@ async def create_chat_message(
         text,
         file_id,
         now_ts(),
+    )
+
+
+async def save_chat_message(chat_id: int, sender_role: str, text: str):
+    chat = await fetchrow("SELECT * FROM chats WHERE id=$1", chat_id)
+    if not chat:
+        return None
+
+    sender_user_id = chat["client_user_id"] if sender_role == "client" else chat["master_user_id"]
+
+    return await create_chat_message(
+        chat_id=chat_id,
+        order_id=chat["order_id"],
+        sender_user_id=sender_user_id,
+        sender_role=sender_role,
+        message_type="text",
+        text=text,
+        file_id=None,
     )
 
 
@@ -705,6 +793,10 @@ async def set_cooldown(user_id: int, action_key: str, ts: int):
             ts,
         )
 
+
+# =========================
+# RATING
+# =========================
 
 async def rate_order(order_id: int, client_user_id: int, rating: int, review_text: str = None):
     pool = get_pool()
