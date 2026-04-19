@@ -32,8 +32,7 @@ logger = logging.getLogger(__name__)
 def make_lock_key(token: str) -> int:
     """
     Генерує стабільний advisory lock key лише з BOT_TOKEN.
-    Це важливо, щоб усі інстанси одного й того ж бота
-    боролися за один і той самий lock.
+    Усі інстанси одного й того ж бота будуть боротися за один lock.
     """
     digest = hashlib.sha256(token.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder="big", signed=True)
@@ -48,6 +47,64 @@ def register_handlers(dp: Dispatcher) -> None:
     common.register(dp)
 
 
+async def safe_close_storage(dp: Dispatcher | None):
+    if not dp or not dp.storage:
+        return
+
+    try:
+        await dp.storage.close()
+        await dp.storage.wait_closed()
+        logger.info("Dispatcher storage closed")
+    except Exception:
+        logger.exception("Failed to close dispatcher storage")
+
+
+async def safe_close_bot_session(bot: Bot | None):
+    if not bot:
+        return
+
+    try:
+        session = await bot.get_session()
+        await session.close()
+        logger.info("Bot session closed")
+    except Exception:
+        logger.exception("Failed to close bot session")
+
+
+async def safe_release_lock(lock_conn, lock_key):
+    if not lock_conn:
+        return
+
+    try:
+        if lock_conn.is_closed():
+            logger.warning("Lock connection already closed before unlock")
+            return
+
+        if lock_key is None:
+            logger.warning("Lock key is missing, unlock skipped")
+            return
+
+        unlocked = await lock_conn.fetchval(
+            "SELECT pg_advisory_unlock($1)",
+            lock_key,
+        )
+        logger.info("Polling lock released: %s", unlocked)
+    except Exception:
+        logger.exception("Failed to release advisory lock")
+
+
+async def safe_close_lock_conn(lock_conn):
+    if not lock_conn:
+        return
+
+    try:
+        if not lock_conn.is_closed():
+            await lock_conn.close()
+        logger.info("Lock connection closed")
+    except Exception:
+        logger.exception("Failed to close lock connection")
+
+
 async def main():
     bot = None
     dp = None
@@ -56,6 +113,7 @@ async def main():
     polling_task = None
     shutdown_wait_task = None
     lock_key = None
+    pg_backend_pid = None
 
     shutdown_event = asyncio.Event()
 
@@ -64,11 +122,11 @@ async def main():
         shutdown_event.set()
 
     try:
-        token = settings.bot_token.strip()
+        token = (settings.bot_token or "").strip()
         if not token:
             raise ValueError("BOT_TOKEN is empty")
 
-        database_url = settings.database_url
+        database_url = (settings.database_url or "").strip()
         if not database_url:
             raise ValueError("DATABASE_URL is empty")
 
@@ -152,6 +210,11 @@ async def main():
             return_when=asyncio.FIRST_COMPLETED,
         )
 
+        for task in pending:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
         if shutdown_event.is_set():
             logger.warning("Shutdown requested. Stopping polling task...")
 
@@ -159,6 +222,8 @@ async def main():
                 polling_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await polling_task
+
+            logger.warning("Polling stopped.")
 
         else:
             if polling_task in done:
@@ -204,41 +269,10 @@ async def main():
             with suppress(asyncio.CancelledError):
                 await polling_task
 
-        if dp and dp.storage:
-            try:
-                await dp.storage.close()
-                await dp.storage.wait_closed()
-                logger.info("Dispatcher storage closed")
-            except Exception:
-                logger.exception("Failed to close dispatcher storage")
-
-        if bot:
-            try:
-                session = await bot.get_session()
-                await session.close()
-                logger.info("Bot session closed")
-            except Exception:
-                logger.exception("Failed to close bot session")
-
-        if lock_conn:
-            try:
-                if not lock_conn.is_closed() and lock_key is not None:
-                    unlocked = await lock_conn.fetchval(
-                        "SELECT pg_advisory_unlock($1)",
-                        lock_key,
-                    )
-                    logger.info("Polling lock released: %s", unlocked)
-                else:
-                    logger.warning("Lock connection already closed before unlock")
-            except Exception:
-                logger.exception("Failed to release advisory lock")
-
-            try:
-                if not lock_conn.is_closed():
-                    await lock_conn.close()
-                logger.info("Lock connection closed")
-            except Exception:
-                logger.exception("Failed to close lock connection")
+        await safe_close_storage(dp)
+        await safe_close_bot_session(bot)
+        await safe_release_lock(lock_conn, lock_key)
+        await safe_close_lock_conn(lock_conn)
 
         logger.info("Bot stopped")
 
