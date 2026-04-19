@@ -65,9 +65,10 @@ def master_menu_kb():
 
 def admin_menu_kb():
     kb = _reply_kb()
-    kb.add(KeyboardButton("👷 База майстрів"))
-    kb.add(KeyboardButton("📝 Заявки майстрів"))
-    kb.add(KeyboardButton("📦 Заявки клієнтів"))
+    kb.add(KeyboardButton("📝 Модерація майстрів"))
+    kb.add(KeyboardButton("👷 Майстри"))
+    kb.add(KeyboardButton("📦 Заявки"))
+    kb.add(KeyboardButton("⚠️ Скарги"))
     kb.add(KeyboardButton("📊 Статистика"))
     kb.add(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
     return kb
