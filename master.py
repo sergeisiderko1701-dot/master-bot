@@ -2,13 +2,15 @@ from aiogram import types
 from aiogram.dispatcher import FSMContext
 
 from config import settings
-from constants import category_label
+from constants import VALID_CATEGORIES, category_label, master_availability_label
 from keyboards import (
     back_menu_kb,
     edit_profile_inline_kb,
     main_menu_kb,
     master_categories_inline_kb,
     master_menu_kb,
+    order_card_master_actions,
+    selected_order_master_actions,
 )
 from repositories import (
     approved_master_row,
@@ -39,6 +41,51 @@ BACK_BUTTONS = {"⬅️ Назад", "Назад", "🔙 Назад"}
 SKIP_WORDS = {"пропустити", "skip", "-"}
 
 
+def _validate_profile_field(field: str, message: types.Message):
+    if field == "photo":
+        value = message.photo[-1].file_id if message.photo else None
+        if not value and (message.text or "").strip().lower() not in SKIP_WORDS:
+            return False, None, "Надішліть фото або напишіть 'пропустити'."
+        return True, value, None
+
+    raw_text = message.text or ""
+
+    if field == "name":
+        value = normalize_text(raw_text, 120)
+        if not value or len(value) < 2:
+            return False, None, "Введіть коректне ім'я."
+        return True, value, None
+
+    if field == "district":
+        value = normalize_text(raw_text, 255)
+        if not value:
+            return False, None, "Будь ласка, вкажіть район роботи."
+        return True, value, None
+
+    if field == "phone":
+        value = normalize_text(raw_text, 50)
+        if not value or len(value) < 8:
+            return False, None, "Введіть коректний номер телефону."
+        return True, value, None
+
+    if field == "description":
+        value = normalize_text(raw_text, 1000)
+        if not value or len(value) < 10:
+            return False, None, "Напишіть трохи детальніше про себе."
+        return True, value, None
+
+    if field == "experience":
+        value = normalize_text(raw_text, 1000)
+        if not value or len(value) < 5:
+            return False, None, "Опишіть свій досвід трохи конкретніше."
+        return True, value, None
+
+    value = normalize_text(raw_text, 1000)
+    if not value:
+        return False, None, "Надішліть текстове значення."
+    return True, value, None
+
+
 def register(dp):
     async def show_master_profile(message: types.Message, master_row):
         text = (
@@ -49,9 +96,9 @@ def register(dp):
             f"📞 Телефон: {master_row['phone'] or '-'}\n"
             f"🧾 Про себе: {master_row['description'] or '-'}\n"
             f"🛠 Досвід: {master_row['experience'] or '-'}\n"
-            f"⭐ Рейтинг: {float(master_row['rating']):.2f}\n"
+            f"⭐ Рейтинг: {float(master_row['rating'] or 0):.2f}\n"
             f"💬 Відгуків: {master_row['reviews_count']}\n"
-            f"🟢 Статус: {master_row['availability']}\n\n"
+            f"🟢 Статус: {master_availability_label(master_row['availability'])}\n\n"
             f"ℹ️ <b>Пам'ятка</b>\n"
             f"• нові заявки надходять тільки у вашу категорію\n"
             f"• контакти клієнта відкриваються після того, як клієнт обере вас\n"
@@ -151,7 +198,7 @@ def register(dp):
     async def reg_category(call: types.CallbackQuery, state: FSMContext):
         category_value = call.data.split("master_cat_", 1)[1].strip()
 
-        if category_value not in {"plumber", "electrician", "repair"}:
+        if category_value not in VALID_CATEGORIES:
             await call.answer("Некоректна категорія", show_alert=True)
             return
 
@@ -328,22 +375,13 @@ def register(dp):
         data = await state.get_data()
         field = data["edit_field"]
 
-        if field == "photo":
-            value = message.photo[-1].file_id if message.photo else None
-            if not value and (message.text or "").strip().lower() not in SKIP_WORDS:
-                await message.answer(
-                    "Надішліть фото або напишіть 'пропустити'.",
-                    reply_markup=back_menu_kb(),
-                )
-                return
-        else:
-            value = normalize_text(message.text, 1000)
-            if not value:
-                await message.answer(
-                    "Надішліть текстове значення.",
-                    reply_markup=back_menu_kb(),
-                )
-                return
+        is_valid, value, error_text = _validate_profile_field(field, message)
+        if not is_valid:
+            await message.answer(
+                error_text,
+                reply_markup=back_menu_kb(),
+            )
+            return
 
         await update_master_profile(
             message.from_user.id,
@@ -390,8 +428,6 @@ def register(dp):
             reply_markup=master_menu_kb(),
         )
 
-        from keyboards import order_card_master_actions
-
         for row in rows[:20]:
             try:
                 await send_order_card(
@@ -430,8 +466,6 @@ def register(dp):
             "✅ <b>Ваші активні заявки</b>",
             reply_markup=master_menu_kb(),
         )
-
-        from keyboards import selected_order_master_actions
 
         for row in rows[:20]:
             try:
