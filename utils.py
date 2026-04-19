@@ -1,4 +1,6 @@
+import html
 import time
+
 from config import settings
 
 
@@ -12,41 +14,44 @@ def is_admin(user_id: int) -> bool:
 
 def normalize_text(value, max_len: int = 1500) -> str:
     """
-    Очищає текст:
+    Очищає та нормалізує текст:
     - приводить до str
     - прибирає зайві пробіли
+    - екранує HTML
     - обрізає довжину
     """
     if value is None:
         return ""
 
     value = str(value).strip()
-
     if not value:
         return ""
 
-    # прибираємо подвійні пробіли
     value = " ".join(value.split())
+    value = html.escape(value)
 
     return value[:max_len]
 
 
 def safe_str(value, default: str = "—") -> str:
     """
-    Безпечний текст для UI
+    Безпечний текст для UI.
     """
     if value is None:
         return default
 
     value = str(value).strip()
-    return value if value else default
+    if not value:
+        return default
+
+    return html.escape(value)
 
 
 def safe_int(value, default: int = 0) -> int:
     """
-    Безпечне число
+    Безпечне число.
     """
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError):
         return default
