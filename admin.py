@@ -11,12 +11,12 @@ from keyboards import (
     admin_pending_master_inline,
     main_menu_kb,
     pagination_inline,
-    support_reply_inline,
 )
 from repositories import (
     admin_stats,
-    approved_master_row,
+    close_chat,
     delete_master_by_id,
+    fetch,
     fetchrow,
     get_master_by_id,
     get_master_name,
@@ -28,7 +28,6 @@ from repositories import (
 )
 from services import send_master_card, send_order_card
 from states import SupportReply
-from ui_texts import master_card_text
 from utils import is_admin
 
 
@@ -52,8 +51,19 @@ def register(dp):
     async def admin_menu(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             return
+
         await state.finish()
-        await message.answer("👑 <b>Адмін-панель</b>", reply_markup=admin_menu_kb())
+
+        stats = await admin_stats()
+        text = (
+            "👑 <b>Адмін-панель</b>\n\n"
+            f"📝 На модерації майстрів: <b>{stats['masters_pending']}</b>\n"
+            f"🆕 Нових заявок: <b>{stats['orders_new']}</b>\n"
+            f"📬 Заявок з пропозиціями: <b>{stats['orders_offered']}</b>\n"
+            f"🛠 В роботі: <b>{stats['orders_progress']}</b>\n\n"
+            "Оберіть розділ нижче 👇"
+        )
+        await message.answer(text, reply_markup=admin_menu_kb())
 
     @dp.message_handler(lambda m: m.text == "📊 Статистика", state="*")
     async def admin_statistics(message: types.Message, state: FSMContext):
@@ -78,7 +88,7 @@ def register(dp):
         )
         await message.answer(text, reply_markup=admin_menu_kb())
 
-    @dp.message_handler(lambda m: m.text == "📝 Заявки майстрів", state="*")
+    @dp.message_handler(lambda m: m.text == "📝 Модерація майстрів", state="*")
     async def pending_masters(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             return
@@ -101,7 +111,7 @@ def register(dp):
             await bot.send_message(chat_id, "Немає майстрів на перевірці.", reply_markup=admin_menu_kb())
             return
 
-        await bot.send_message(chat_id, "📝 <b>Заявки майстрів</b>", reply_markup=admin_menu_kb())
+        await bot.send_message(chat_id, "📝 <b>Модерація майстрів</b>", reply_markup=admin_menu_kb())
 
         for row in rows:
             await send_master_card(
@@ -170,7 +180,7 @@ def register(dp):
         await call.message.answer("❌ Анкету відхилено.")
         await call.answer("Готово")
 
-    @dp.message_handler(lambda m: m.text == "👷 База майстрів", state="*")
+    @dp.message_handler(lambda m: m.text == "👷 Майстри", state="*")
     async def admin_masters(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             return
@@ -193,7 +203,7 @@ def register(dp):
             await bot.send_message(chat_id, "Майстрів не знайдено.", reply_markup=admin_menu_kb())
             return
 
-        await bot.send_message(chat_id, "👷 <b>База майстрів</b>", reply_markup=admin_menu_kb())
+        await bot.send_message(chat_id, "👷 <b>Майстри</b>", reply_markup=admin_menu_kb())
 
         for row in rows:
             await send_master_card(
@@ -285,7 +295,7 @@ def register(dp):
         await call.message.answer("🗑 Майстра видалено.")
         await call.answer("Готово")
 
-    @dp.message_handler(lambda m: m.text == "📦 Заявки клієнтів", state="*")
+    @dp.message_handler(lambda m: m.text == "📦 Заявки", state="*")
     async def admin_orders(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             return
@@ -323,7 +333,7 @@ def register(dp):
             await bot.send_message(chat_id, "Заявок не знайдено.", reply_markup=admin_menu_kb())
             return
 
-        title = "📦 <b>Заявки клієнтів</b>"
+        title = "📦 <b>Заявки</b>"
         if status_filter:
             title += f"\nФільтр: <b>{status_label(status_filter)}</b>"
         await bot.send_message(chat_id, title, reply_markup=admin_menu_kb())
@@ -376,6 +386,7 @@ def register(dp):
             return
         order_id = int(call.data.split("_")[-1])
         await set_order_status(order_id, "expired")
+        await close_chat(order_id)
         await call.message.answer("⌛ Заявку позначено як неактуальну.")
         await call.answer("Готово")
 
@@ -404,6 +415,7 @@ def register(dp):
         selected_master_id = row["selected_master_id"] if row else None
 
         await set_order_status(order_id, "done", selected_master_id)
+        await close_chat(order_id)
         await call.message.answer("🏁 Заявку завершено.")
         await call.answer("Готово")
 
@@ -414,8 +426,46 @@ def register(dp):
             return
         order_id = int(call.data.split("_")[-1])
         await set_order_status(order_id, "new", None)
+        await close_chat(order_id)
         await call.message.answer("🔄 Заявку повернуто в статус 'нова'.")
         await call.answer("Готово")
+
+    @dp.message_handler(lambda m: m.text == "⚠️ Скарги", state="*")
+    async def admin_complaints(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+
+        rows = await fetch(
+            """
+            SELECT *
+            FROM complaints
+            ORDER BY id DESC
+            LIMIT 20
+            """
+        )
+
+        if not rows:
+            await message.answer(
+                "⚠️ <b>Скарг поки немає</b>",
+                reply_markup=admin_menu_kb(),
+            )
+            return
+
+        await message.answer(
+            "⚠️ <b>Останні скарги</b>",
+            reply_markup=admin_menu_kb(),
+        )
+
+        for row in rows:
+            text = (
+                f"⚠️ <b>Скарга #{row['id']}</b>\n\n"
+                f"🆔 <b>Заявка:</b> #{row['order_id']}\n"
+                f"👤 <b>Від кого:</b> <code>{row['from_user_id']}</code>\n"
+                f"🎯 <b>На кого:</b> {row['against_role']} "
+                f"(<code>{row['against_user_id']}</code>)\n\n"
+                f"💬 <b>Текст:</b>\n{row['text']}"
+            )
+            await message.answer(text)
 
     # =========================
     # SUPPORT REPLY
@@ -435,8 +485,8 @@ def register(dp):
         await call.message.answer(
             f"↩️ <b>Відповідь користувачу</b>\n\n"
             f"ID: <code>{user_id}</code>\n\n"
-            f"Напишіть текст відповіді одним повідомленням.",
-            reply_markup=main_menu_kb(is_admin_user=True),
+            "Напишіть текст відповіді одним повідомленням.",
+            reply_markup=admin_menu_kb(),
         )
         await call.answer()
 
