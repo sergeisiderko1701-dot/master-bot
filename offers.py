@@ -11,6 +11,7 @@ from keyboards import (
     exit_chat_inline,
     main_menu_kb,
     offer_select_inline,
+    rating_inline,
     selected_order_master_actions,
 )
 from repositories import (
@@ -19,16 +20,19 @@ from repositories import (
     create_chat_message,
     create_offer,
     fetchrow,
+    finish_order,
     get_chat_for_order,
     get_chat_history,
     get_cooldown,
     get_order_row,
     master_active_orders_count,
+    rate_order,
+    refuse_order,
     set_cooldown,
     touch_master_presence,
 )
 from services import send_chat_history
-from states import ChatFlow, OfferCreate
+from states import ChatFlow, OfferCreate, RatingFlow
 from ui_texts import (
     chat_media_caption,
     chat_open_text,
@@ -195,6 +199,10 @@ def register(dp):
             await message_or_call.answer()
         else:
             await message_or_call.answer(text, reply_markup=chat_reply_kb())
+
+    # =========================
+    # OFFERS FLOW
+    # =========================
 
     @dp.callback_query_handler(lambda c: c.data.startswith("offer_start_"), state="*")
     async def offer_start(call: types.CallbackQuery, state: FSMContext):
@@ -396,6 +404,196 @@ def register(dp):
             await share_contacts_after_choose(call, order_id, offer_full)
 
         await call.answer("Пропозицію обрано")
+
+    # =========================
+    # FINISH / REFUSE
+    # =========================
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("finish_order_"), state="*")
+    async def finish_order_handler(call: types.CallbackQuery, state: FSMContext):
+        order_id = int(call.data.split("_")[-1])
+
+        order = await fetchrow(
+            """
+            SELECT *
+            FROM orders
+            WHERE id=$1
+              AND selected_master_id=$2
+              AND status = ANY($3::text[])
+            """,
+            order_id,
+            call.from_user.id,
+            ["matched", "in_progress"],
+        )
+        if not order:
+            await call.answer("Заявка недоступна для завершення.", show_alert=True)
+            return
+
+        await finish_order(order_id)
+
+        await call.message.answer(
+            f"🏁 <b>Заявку #{order_id} завершено</b>",
+            reply_markup=main_menu_kb(is_admin_user=is_admin(call.from_user.id)),
+        )
+
+        try:
+            await dp.bot.send_message(
+                order["user_id"],
+                (
+                    f"🏁 <b>Заявку #{order_id} позначено як завершену</b>\n\n"
+                    "Будь ласка, оцініть майстра від 1 до 5 ⭐"
+                ),
+                reply_markup=rating_inline(order_id),
+            )
+        except Exception as e:
+            logger.warning("Не вдалося надіслати клієнту запит на рейтинг по заявці %s: %s", order_id, e)
+
+        await call.answer("Заявку завершено")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("refuse_order_"), state="*")
+    async def refuse_order_handler(call: types.CallbackQuery, state: FSMContext):
+        order_id = int(call.data.split("_")[-1])
+
+        order = await fetchrow(
+            """
+            SELECT *
+            FROM orders
+            WHERE id=$1
+              AND selected_master_id=$2
+              AND status = ANY($3::text[])
+            """,
+            order_id,
+            call.from_user.id,
+            ["matched", "in_progress"],
+        )
+        if not order:
+            await call.answer("Неможливо відмовитись від цієї заявки.", show_alert=True)
+            return
+
+        await refuse_order(order_id)
+
+        await call.message.answer(
+            f"❌ <b>Ви відмовились від заявки #{order_id}</b>",
+            reply_markup=main_menu_kb(is_admin_user=is_admin(call.from_user.id)),
+        )
+
+        try:
+            await dp.bot.send_message(
+                order["user_id"],
+                (
+                    f"❌ <b>Майстер відмовився від заявки #{order_id}</b>\n\n"
+                    "Заявка знову відкрита для нових пропозицій."
+                ),
+                reply_markup=client_order_actions_inline(order_id, "offered"),
+            )
+        except Exception as e:
+            logger.warning("Не вдалося повідомити клієнта про відмову по заявці %s: %s", order_id, e)
+
+        await call.answer("Відмову збережено")
+
+    # =========================
+    # RATING FLOW
+    # =========================
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("rate_"), state="*")
+    async def rate_choose_handler(call: types.CallbackQuery, state: FSMContext):
+        try:
+            _, order_id_str, rating_str = call.data.split("_")
+            order_id = int(order_id_str)
+            rating_value = int(rating_str)
+        except Exception:
+            await call.answer("Некоректна оцінка", show_alert=True)
+            return
+
+        order = await fetchrow(
+            """
+            SELECT *
+            FROM orders
+            WHERE id=$1
+              AND user_id=$2
+              AND status='done'
+            """,
+            order_id,
+            call.from_user.id,
+        )
+        if not order:
+            await call.answer("Цю заявку не можна оцінити.", show_alert=True)
+            return
+
+        if order["rating"] is not None:
+            await call.answer("Ви вже оцінили цю заявку.", show_alert=True)
+            return
+
+        await state.finish()
+        await state.update_data(rate_order_id=order_id, rate_value=rating_value)
+        await RatingFlow.review.set()
+
+        await call.message.answer(
+            f"⭐ <b>Оцінка: {rating_value}/5</b>\n\n"
+            "Напишіть короткий відгук або напишіть <b>пропустити</b>.",
+            reply_markup=back_menu_kb(),
+        )
+        await call.answer()
+
+    @dp.message_handler(state=RatingFlow.review, content_types=types.ContentTypes.TEXT)
+    async def rate_review_handler(message: types.Message, state: FSMContext):
+        data = await state.get_data()
+        order_id = data.get("rate_order_id")
+        rating_value = data.get("rate_value")
+
+        if not order_id or not rating_value:
+            await state.finish()
+            await message.answer(
+                "Не вдалося зберегти оцінку.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
+
+        review_text = (message.text or "").strip()
+        if review_text.lower() in SKIP_WORDS:
+            review_text = None
+        else:
+            review_text = normalize_text(review_text, 1000)
+
+        result = await rate_order(
+            order_id=order_id,
+            client_user_id=message.from_user.id,
+            rating=rating_value,
+            review_text=review_text,
+        )
+
+        if not result:
+            await state.finish()
+            await message.answer(
+                "Не вдалося зберегти оцінку. Можливо, заявку вже оцінено.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
+
+        try:
+            if result["selected_master_id"]:
+                await dp.bot.send_message(
+                    result["selected_master_id"],
+                    (
+                        f"⭐ <b>Клієнт оцінив вашу роботу</b>\n\n"
+                        f"Заявка #{order_id}\n"
+                        f"Оцінка: <b>{rating_value}/5</b>\n"
+                        f"{f'Відгук: {review_text}' if review_text else 'Без текстового відгуку'}"
+                    ),
+                )
+        except Exception as e:
+            logger.warning("Не вдалося повідомити майстра про нову оцінку по заявці %s: %s", order_id, e)
+
+        await state.finish()
+        await message.answer(
+            "✅ <b>Дякуємо за оцінку</b>\n\n"
+            "Ваш відгук допоможе іншим клієнтам обирати майстра.",
+            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+        )
+
+    # =========================
+    # DIALOG BY ORDER
+    # =========================
 
     @dp.callback_query_handler(lambda c: c.data.startswith("client_chat_"), state="*")
     async def client_dialog_start(call: types.CallbackQuery, state: FSMContext):
