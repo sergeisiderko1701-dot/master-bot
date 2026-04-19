@@ -704,3 +704,71 @@ async def set_cooldown(user_id: int, action_key: str, ts: int):
             action_key,
             ts,
         )
+
+
+async def rate_order(order_id: int, client_user_id: int, rating: int, review_text: str = None):
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            order = await conn.fetchrow(
+                """
+                SELECT *
+                FROM orders
+                WHERE id=$1
+                  AND user_id=$2
+                  AND status='done'
+                FOR UPDATE
+                """,
+                order_id,
+                client_user_id,
+            )
+
+            if not order:
+                return None
+
+            if order["rating"] is not None:
+                return None
+
+            master_user_id = order["selected_master_id"]
+            if not master_user_id:
+                return None
+
+            await conn.execute(
+                """
+                UPDATE orders
+                SET rating=$1,
+                    review_text=$2,
+                    updated_at=$3
+                WHERE id=$4
+                """,
+                rating,
+                review_text,
+                now_ts(),
+                order_id,
+            )
+
+            stats = await conn.fetchrow(
+                """
+                SELECT
+                    COALESCE(AVG(rating), 0) AS avg_rating,
+                    COUNT(rating) AS reviews_count
+                FROM orders
+                WHERE selected_master_id=$1
+                  AND rating IS NOT NULL
+                """,
+                master_user_id,
+            )
+
+            await conn.execute(
+                """
+                UPDATE masters
+                SET rating=$1,
+                    reviews_count=$2
+                WHERE user_id=$3
+                """,
+                float(stats["avg_rating"] or 0),
+                int(stats["reviews_count"] or 0),
+                master_user_id,
+            )
+
+            return await conn.fetchrow("SELECT * FROM orders WHERE id=$1", order_id)
