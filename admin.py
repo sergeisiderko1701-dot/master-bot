@@ -20,13 +20,15 @@ from repositories import (
     fetchrow,
     get_master_by_id,
     get_master_name,
+    get_order_row,
     list_admin_masters,
     list_admin_orders,
+    list_order_offers,
     list_pending_masters,
     set_master_status_by_id,
     set_order_status,
 )
-from services import send_master_card, send_order_card
+from services import send_admin_order_detail, send_master_card, send_order_card
 from states import SupportReply
 from utils import is_admin
 
@@ -99,6 +101,7 @@ def register(dp):
         if not is_admin(call.from_user.id):
             await call.answer()
             return
+
         page = int(call.data.split("_")[-1])
         await _show_pending_masters(call.message.chat.id, page, dp.bot)
         await call.answer()
@@ -191,6 +194,7 @@ def register(dp):
         if not is_admin(call.from_user.id):
             await call.answer()
             return
+
         page = int(call.data.split("_")[-1])
         await _show_admin_masters(call.message.chat.id, page, dp.bot)
         await call.answer()
@@ -299,6 +303,7 @@ def register(dp):
     async def admin_orders(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             return
+
         await state.finish()
         await message.answer("📦 <b>Фільтр заявок</b>", reply_markup=admin_orders_filter_kb())
 
@@ -345,7 +350,6 @@ def register(dp):
                 chat_id,
                 row,
                 title="📄 Заявка",
-                master_name=master_name,
                 reply_markup=admin_order_actions_inline(row["id"], row["status"]),
             )
 
@@ -363,20 +367,13 @@ def register(dp):
             return
 
         order_id = int(call.data.split("_")[-1])
-        row = await fetchrow("SELECT * FROM orders WHERE id=$1", order_id)
-        if not row:
+        order = await get_order_row(order_id)
+        if not order:
             await call.answer("Заявку не знайдено", show_alert=True)
             return
 
-        master_name = await get_master_name(row["selected_master_id"])
-        await send_order_card(
-            dp.bot,
-            call.message.chat.id,
-            row,
-            title="📄 Деталі заявки",
-            master_name=master_name,
-            reply_markup=admin_order_actions_inline(row["id"], row["status"]),
-        )
+        offers = await list_order_offers(order_id)
+        await send_admin_order_detail(dp.bot, call.message.chat.id, order, offers)
         await call.answer()
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_expire_order_"), state="*")
@@ -384,6 +381,7 @@ def register(dp):
         if not is_admin(call.from_user.id):
             await call.answer()
             return
+
         order_id = int(call.data.split("_")[-1])
         await set_order_status(order_id, "expired")
         await close_chat(order_id)
@@ -395,8 +393,8 @@ def register(dp):
         if not is_admin(call.from_user.id):
             await call.answer()
             return
-        order_id = int(call.data.split("_")[-1])
 
+        order_id = int(call.data.split("_")[-1])
         row = await fetchrow("SELECT selected_master_id FROM orders WHERE id=$1", order_id)
         selected_master_id = row["selected_master_id"] if row else None
 
@@ -409,8 +407,8 @@ def register(dp):
         if not is_admin(call.from_user.id):
             await call.answer()
             return
-        order_id = int(call.data.split("_")[-1])
 
+        order_id = int(call.data.split("_")[-1])
         row = await fetchrow("SELECT selected_master_id FROM orders WHERE id=$1", order_id)
         selected_master_id = row["selected_master_id"] if row else None
 
@@ -424,6 +422,7 @@ def register(dp):
         if not is_admin(call.from_user.id):
             await call.answer()
             return
+
         order_id = int(call.data.split("_")[-1])
         await set_order_status(order_id, "new", None)
         await close_chat(order_id)
@@ -479,7 +478,7 @@ def register(dp):
 
         user_id = int(call.data.split("_")[-1])
         await state.finish()
-        await state.update_data(support_reply_user_id=user_id)
+        await state.update_data(support_target_user_id=user_id)
         await SupportReply.text.set()
 
         await call.message.answer(
@@ -497,12 +496,15 @@ def register(dp):
             return
 
         data = await state.get_data()
-        user_id = data.get("support_reply_user_id")
+        user_id = data.get("support_target_user_id")
         text = (message.text or "").strip()
 
         if not user_id:
             await state.finish()
-            await message.answer("Не вдалося визначити користувача.", reply_markup=admin_menu_kb())
+            await message.answer(
+                "Не вдалося визначити користувача.",
+                reply_markup=admin_menu_kb(),
+            )
             return
 
         if not text or len(text) < 2:
