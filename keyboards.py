@@ -21,10 +21,6 @@ def _inline_kb(row_width: int = 1) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(row_width=row_width)
 
 
-# =========================
-# MAIN MENUS
-# =========================
-
 def main_menu_kb(is_admin_user: bool = False):
     kb = _reply_kb()
     kb.add(KeyboardButton("👤 Клієнт"), KeyboardButton("🔧 Майстер"))
@@ -52,7 +48,6 @@ def client_actions_kb():
     kb = _reply_kb()
     kb.add(KeyboardButton("📨 Створити заявку"))
     kb.add(KeyboardButton("📦 Мої заявки"))
-    kb.add(KeyboardButton("👷 Переглянути майстрів"))
     kb.add(KeyboardButton("🔄 Змінити спеціальність"))
     kb.add(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
     return kb
@@ -89,10 +84,6 @@ def admin_orders_filter_kb():
     return kb
 
 
-# =========================
-# MASTER REGISTRATION / PROFILE
-# =========================
-
 def master_categories_inline_kb():
     kb = _inline_kb(row_width=1)
     for label, value in CATEGORIES:
@@ -112,10 +103,6 @@ def edit_profile_inline_kb():
     )
     return kb
 
-
-# =========================
-# OFFERS / ORDERS
-# =========================
 
 def order_card_master_actions(order_id: int):
     kb = _inline_kb(row_width=1)
@@ -157,10 +144,6 @@ def selected_order_master_actions(order_id: int):
     )
     return kb
 
-
-# =========================
-# ADMIN INLINE
-# =========================
 
 def admin_master_card_inline(master_id: int, status: str):
     kb = _inline_kb(row_width=1)
@@ -204,10 +187,6 @@ def admin_order_actions_inline(order_id: int, status: str):
     return kb
 
 
-# =========================
-# HELPERS
-# =========================
-
 def pagination_inline(prefix: str, page: int, has_prev: bool, has_next: bool):
     kb = _inline_kb(row_width=2)
     row = []
@@ -229,10 +208,6 @@ def support_reply_inline(user_id: int):
     kb.add(InlineKeyboardButton("↩️ Відповісти", callback_data=f"support_reply_{user_id}"))
     return kb
 
-
-# =========================
-# DIALOG / MESSAGE MODE
-# =========================
 
 def exit_chat_inline():
     kb = _inline_kb(row_width=1)
