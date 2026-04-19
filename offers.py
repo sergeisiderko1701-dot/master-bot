@@ -15,6 +15,7 @@ from keyboards import (
     selected_order_master_actions,
 )
 from repositories import (
+    add_complaint,
     approved_master_row,
     choose_offer,
     create_chat_message,
@@ -32,7 +33,7 @@ from repositories import (
     touch_master_presence,
 )
 from services import send_chat_history
-from states import ChatFlow, OfferCreate, RatingFlow
+from states import ChatFlow, ComplaintWrite, OfferCreate, RatingFlow
 from ui_texts import (
     chat_media_caption,
     chat_open_text,
@@ -490,6 +491,144 @@ def register(dp):
             logger.warning("Не вдалося повідомити клієнта про відмову по заявці %s: %s", order_id, e)
 
         await call.answer("Відмову збережено")
+
+    # =========================
+    # COMPLAINTS
+    # =========================
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("complain_master_"), state="*")
+    async def complain_master_start(call: types.CallbackQuery, state: FSMContext):
+        order_id = int(call.data.split("_")[-1])
+
+        order = await fetchrow(
+            """
+            SELECT *
+            FROM orders
+            WHERE id=$1
+              AND user_id=$2
+              AND selected_master_id IS NOT NULL
+            """,
+            order_id,
+            call.from_user.id,
+        )
+        if not order:
+            await call.answer("Скаргу не можна подати.", show_alert=True)
+            return
+
+        await state.finish()
+        await state.update_data(
+            complaint_order_id=order_id,
+            against_user_id=order["selected_master_id"],
+            against_role="master",
+            complaint_return_role="client",
+        )
+        await ComplaintWrite.text.set()
+
+        await call.message.answer(
+            "⚠️ <b>Скарга на майстра</b>\n\n"
+            "Напишіть коротко, що сталося.\n"
+            "Повідомлення отримає адміністратор.",
+            reply_markup=back_menu_kb(),
+        )
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("complain_client_"), state="*")
+    async def complain_client_start(call: types.CallbackQuery, state: FSMContext):
+        order_id = int(call.data.split("_")[-1])
+
+        order = await fetchrow(
+            """
+            SELECT *
+            FROM orders
+            WHERE id=$1
+              AND selected_master_id=$2
+            """,
+            order_id,
+            call.from_user.id,
+        )
+        if not order:
+            await call.answer("Скаргу не можна подати.", show_alert=True)
+            return
+
+        await state.finish()
+        await state.update_data(
+            complaint_order_id=order_id,
+            against_user_id=order["user_id"],
+            against_role="client",
+            complaint_return_role="master",
+        )
+        await ComplaintWrite.text.set()
+
+        await call.message.answer(
+            "⚠️ <b>Скарга на клієнта</b>\n\n"
+            "Напишіть коротко, що сталося.\n"
+            "Повідомлення отримає адміністратор.",
+            reply_markup=back_menu_kb(),
+        )
+        await call.answer()
+
+    @dp.message_handler(state=ComplaintWrite.text, content_types=types.ContentTypes.TEXT)
+    async def complaint_send(message: types.Message, state: FSMContext):
+        text = normalize_text(message.text, 1500)
+        data = await state.get_data()
+
+        order_id = data.get("complaint_order_id")
+        against_user_id = data.get("against_user_id")
+        against_role = data.get("against_role")
+        return_role = data.get("complaint_return_role")
+
+        if not order_id or not against_user_id or not against_role:
+            await state.finish()
+            await message.answer(
+                "Не вдалося зберегти скаргу.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
+
+        if not text or len(text) < 5:
+            await message.answer(
+                "Опишіть проблему трохи детальніше.",
+                reply_markup=back_menu_kb(),
+            )
+            return
+
+        try:
+            await add_complaint(
+                order_id=order_id,
+                from_user_id=message.from_user.id,
+                against_user_id=against_user_id,
+                against_role=against_role,
+                text=text,
+            )
+
+            username_line = f"🔗 Username: @{message.from_user.username}\n" if message.from_user.username else ""
+            admin_text = (
+                "⚠️ <b>Нова скарга</b>\n\n"
+                f"🆔 <b>Заявка:</b> #{order_id}\n"
+                f"👤 <b>Від кого:</b> {message.from_user.full_name}\n"
+                f"🆔 <b>ID автора:</b> <code>{message.from_user.id}</code>\n"
+                f"{username_line}"
+                f"🎯 <b>На кого:</b> {against_role}\n"
+                f"🆔 <b>ID відповідача:</b> <code>{against_user_id}</code>\n\n"
+                f"💬 <b>Текст скарги:</b>\n{text}"
+            )
+
+            await dp.bot.send_message(settings.admin_id, admin_text)
+        except Exception as e:
+            logger.warning("Не вдалося зберегти/відправити скаргу по заявці %s: %s", order_id, e)
+            await state.finish()
+            await message.answer(
+                "Не вдалося надіслати скаргу. Спробуйте пізніше.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
+
+        await state.finish()
+        await message.answer(
+            "✅ <b>Скаргу надіслано</b>\n\n"
+            "Адміністратор розгляне її найближчим часом.",
+            reply_markup=_after_dialog_markup(return_role, order_id),
+        )
 
     # =========================
     # RATING FLOW
