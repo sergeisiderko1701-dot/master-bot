@@ -99,7 +99,7 @@ def register(dp):
             f"{username_line}"
             f"Telegram: {tg_link}\n"
             f"ID: <code>{user.id}</code>\n\n"
-            f"Контакти відкрито після вибору майстра."
+            "Контакти відкрито після того, як клієнт обрав вас."
         )
 
     def build_master_contact_text(master_row, order_id: int) -> str:
@@ -110,7 +110,7 @@ def register(dp):
             f"👷 <b>Контакти майстра по заявці #{order_id}</b>\n\n"
             f"Ім'я: {name}\n"
             f"📞 Телефон: {phone}\n\n"
-            f"Контакти відкрито. Можете дзвонити напряму або написати через ✉️ у боті."
+            "Контакти відкрито. Можете дзвонити напряму або написати через ✉️ у боті."
         )
 
     async def share_contacts_after_choose(call: types.CallbackQuery, order_id: int, offer_full):
@@ -154,8 +154,8 @@ def register(dp):
 
         text = (
             f"✉️ <b>Повідомлення по заявці #{order_id}</b>\n\n"
-            f"Надішліть <b>одне</b> повідомлення, фото або відео.\n"
-            f"Після відправки режим автоматично закриється."
+            "Надішліть одне повідомлення, фото або відео.\n"
+            "Після відправки режим автоматично закриється."
         )
 
         if isinstance(message_or_call, types.CallbackQuery):
@@ -209,8 +209,8 @@ def register(dp):
 
         await call.message.answer(
             f"💰 <b>Відгук на заявку #{order_id}</b>\n\n"
-            f"Вкажіть ціну або діапазон.\n"
-            f"Наприклад: <b>800 грн</b> або <b>800–1200 грн</b>",
+            "Вкажіть ціну або діапазон.\n"
+            "Наприклад: <b>800 грн</b> або <b>800–1200 грн</b>",
             reply_markup=back_menu_kb(),
         )
         await call.answer()
@@ -336,7 +336,7 @@ def register(dp):
         await state.finish()
         await message.answer(
             "✅ <b>Пропозицію надіслано клієнту</b>\n\n"
-            "Після вибору клієнтом контакти будуть відкриті автоматично.",
+            "Якщо клієнт обере вас, контакти відкриються автоматично.",
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
 
@@ -356,8 +356,11 @@ def register(dp):
         await call.message.answer(
             "✅ <b>Майстра обрано</b>\n\n"
             "Контакти відкрито.\n"
-            "Можна писати в боті через ✉️ або дзвонити напряму.\n"
-            "Якщо щось не так — використайте кнопку скарги.",
+            "Тепер ви можете:\n"
+            "• зателефонувати напряму\n"
+            "• написати через ✉️ у боті\n"
+            "• переглянути історію діалогу\n"
+            "• залишити скаргу, якщо виникне проблема",
             reply_markup=client_order_actions_inline(order_id, "matched"),
         )
 
@@ -368,7 +371,8 @@ def register(dp):
                 await dp.bot.send_message(
                     offer_full["master_user_id"],
                     f"🎉 <b>Вашу пропозицію обрано по заявці #{order_id}</b>\n\n"
-                    f"Контакти клієнта відкрито. Можете зв'язатися напряму або написати через ✉️ у боті.",
+                    "Контакти клієнта відкрито.\n"
+                    "Тепер ви можете зв'язатися напряму або написати через ✉️ у боті.",
                     reply_markup=selected_order_master_actions(order_id),
                 )
             except Exception as e:
@@ -378,7 +382,7 @@ def register(dp):
             try:
                 await dp.bot.send_message(
                     order["user_id"],
-                    f"📜 <b>Історія діалогу по заявці #{order_id}</b> буде доступна через кнопку історії.",
+                    f"📜 <b>Історія діалогу по заявці #{order_id}</b> доступна через кнопку історії.",
                     reply_markup=client_order_actions_inline(order_id, "matched"),
                 )
             except Exception as e:
@@ -480,17 +484,8 @@ def register(dp):
         msgs = await get_chat_history(data["order_id"], 30)
         await send_chat_history(dp.bot, message.chat.id, data["order_id"], msgs)
 
-    @dp.message_handler(lambda m: m.text == "❌ Закрити", state=ChatFlow.message)
+    @dp.message_handler(lambda m: m.text in {"❌ Закрити", "❌ Закрити чат"}, state=ChatFlow.message)
     async def close_dialog_mode(message: types.Message, state: FSMContext):
-        await state.finish()
-        await message.answer(
-            "✋ <b>Режим написання закрито</b>\n\n"
-            "Щоб написати ще раз — натисніть ✉️ по заявці.",
-            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
-        )
-
-    @dp.message_handler(lambda m: m.text == "❌ Закрити чат", state=ChatFlow.message)
-    async def close_dialog_mode_legacy(message: types.Message, state: FSMContext):
         await state.finish()
         await message.answer(
             "✋ <b>Режим написання закрито</b>\n\n"
