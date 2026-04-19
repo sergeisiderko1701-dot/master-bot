@@ -93,6 +93,22 @@ def register(dp):
         except Exception:
             return default
 
+    def _after_dialog_markup(role: str, order_id: int):
+        if role == "client":
+            return client_order_actions_inline(order_id, "matched")
+        return selected_order_master_actions(order_id)
+
+    def _after_dialog_text(role: str, order_id: int) -> str:
+        if role == "client":
+            return (
+                f"✅ <b>Повідомлення надіслано</b>\n\n"
+                f"Ви повернулись до заявки #{order_id}."
+            )
+        return (
+            f"✅ <b>Повідомлення надіслано</b>\n\n"
+            f"Ви повернулись до активної заявки #{order_id}."
+        )
+
     def build_client_contact_text(user: types.User, order_row) -> str:
         full_name = " ".join(
             part for part in [user.first_name, user.last_name] if part
@@ -118,7 +134,6 @@ def register(dp):
     async def share_contacts_after_choose(call: types.CallbackQuery, order_id: int, offer_full):
         order_row = await get_order_row(order_id)
 
-        # Клієнту: одне повідомлення з контактами майстра + кнопки
         try:
             await dp.bot.send_message(
                 call.from_user.id,
@@ -138,7 +153,6 @@ def register(dp):
                 e,
             )
 
-        # Майстру: одне повідомлення з фактом вибору + контактами клієнта + кнопки
         try:
             await dp.bot.send_message(
                 offer_full["master_user_id"],
@@ -181,10 +195,6 @@ def register(dp):
             await message_or_call.answer()
         else:
             await message_or_call.answer(text, reply_markup=chat_reply_kb())
-
-    # =========================
-    # OFFERS FLOW
-    # =========================
 
     @dp.callback_query_handler(lambda c: c.data.startswith("offer_start_"), state="*")
     async def offer_start(call: types.CallbackQuery, state: FSMContext):
@@ -387,10 +397,6 @@ def register(dp):
 
         await call.answer("Пропозицію обрано")
 
-    # =========================
-    # DIALOG BY ORDER
-    # =========================
-
     @dp.callback_query_handler(lambda c: c.data.startswith("client_chat_"), state="*")
     async def client_dialog_start(call: types.CallbackQuery, state: FSMContext):
         order_id = int(call.data.split("_")[-1])
@@ -489,10 +495,21 @@ def register(dp):
 
     @dp.message_handler(lambda m: m.text in {"❌ Закрити", "❌ Закрити чат"}, state=ChatFlow.message)
     async def close_dialog_mode(message: types.Message, state: FSMContext):
+        data = await state.get_data()
+        role = data.get("chat_role")
+        order_id = data.get("order_id")
         await state.finish()
+
+        if role and order_id:
+            await message.answer(
+                "✋ <b>Режим написання закрито</b>\n\n"
+                f"Ви повернулись до заявки #{order_id}.",
+                reply_markup=_after_dialog_markup(role, order_id),
+            )
+            return
+
         await message.answer(
-            "✋ <b>Режим написання закрито</b>\n\n"
-            "Щоб написати ще раз — натисніть ✉️ по заявці.",
+            "✋ <b>Режим написання закрито</b>",
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
 
@@ -509,7 +526,7 @@ def register(dp):
             await state.finish()
             await message.answer(
                 "Цей діалог уже недоступний.",
-                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+                reply_markup=_after_dialog_markup(role, order_id),
             )
             return
 
@@ -536,9 +553,8 @@ def register(dp):
                 )
                 await state.finish()
                 await message.answer(
-                    "✅ <b>Фото надіслано</b>\n\n"
-                    "Щоб написати ще — знову натисніть ✉️ по заявці.",
-                    reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+                    _after_dialog_text(role, order_id),
+                    reply_markup=_after_dialog_markup(role, order_id),
                 )
                 return
 
@@ -561,9 +577,8 @@ def register(dp):
                 )
                 await state.finish()
                 await message.answer(
-                    "✅ <b>Відео надіслано</b>\n\n"
-                    "Щоб написати ще — знову натисніть ✉️ по заявці.",
-                    reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+                    _after_dialog_text(role, order_id),
+                    reply_markup=_after_dialog_markup(role, order_id),
                 )
                 return
 
@@ -591,9 +606,8 @@ def register(dp):
             )
             await state.finish()
             await message.answer(
-                "✅ <b>Повідомлення надіслано</b>\n\n"
-                "Щоб написати ще — знову натисніть ✉️ по заявці.",
-                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+                _after_dialog_text(role, order_id),
+                reply_markup=_after_dialog_markup(role, order_id),
             )
 
         except Exception as e:
