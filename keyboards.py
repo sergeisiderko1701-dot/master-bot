@@ -220,3 +220,15 @@ def chat_reply_kb():
     kb.add(KeyboardButton("📜 Історія"), KeyboardButton("❌ Закрити"))
     kb.add(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
     return kb
+
+
+def rating_inline(order_id: int):
+    kb = _inline_kb(row_width=5)
+    kb.add(
+        InlineKeyboardButton("1⭐", callback_data=f"rate_{order_id}_1"),
+        InlineKeyboardButton("2⭐", callback_data=f"rate_{order_id}_2"),
+        InlineKeyboardButton("3⭐", callback_data=f"rate_{order_id}_3"),
+        InlineKeyboardButton("4⭐", callback_data=f"rate_{order_id}_4"),
+        InlineKeyboardButton("5⭐", callback_data=f"rate_{order_id}_5"),
+    )
+    return kb
