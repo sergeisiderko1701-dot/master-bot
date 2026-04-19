@@ -29,7 +29,14 @@ from repositories import (
 )
 from services import send_chat_history
 from states import ChatFlow, OfferCreate
-from ui_texts import chat_media_caption, chat_text_message, offer_card_text
+from ui_texts import (
+    chat_media_caption,
+    chat_open_text,
+    chat_text_message,
+    client_master_selected_text,
+    master_selected_for_master_text,
+    offer_card_text,
+)
 from utils import is_admin, normalize_text, now_ts
 
 
@@ -87,13 +94,19 @@ def register(dp):
             return default
 
     def build_client_contact_text(user: types.User, order_row) -> str:
-        full_name = " ".join(part for part in [user.first_name, user.last_name] if part).strip() or "Клієнт"
+        full_name = " ".join(
+            part for part in [user.first_name, user.last_name] if part
+        ).strip() or "Клієнт"
         username_line = f"🔗 Username: @{user.username}\n" if user.username else ""
         tg_link = f'<a href="tg://user?id={user.id}">{full_name}</a>'
-        phone_line = f"📞 Телефон: {_safe_val(order_row, 'client_phone')}\n" if _safe_val(order_row, "client_phone") else ""
+        phone_line = (
+            f"📞 Телефон: {_safe_val(order_row, 'client_phone')}\n"
+            if _safe_val(order_row, "client_phone")
+            else ""
+        )
 
         return (
-            f"👤 <b>Контакти клієнта</b>\n\n"
+            "👤 <b>Контакти клієнта</b>\n\n"
             f"Ім'я: {full_name}\n"
             f"{phone_line}"
             f"{username_line}"
@@ -102,29 +115,30 @@ def register(dp):
             "Контакти відкрито після того, як клієнт обрав вас."
         )
 
-    def build_master_contact_text(master_row, order_id: int) -> str:
-        name = _safe_val(master_row, "name", "Майстер")
-        phone = _safe_val(master_row, "phone", "—")
-
-        return (
-            f"👷 <b>Контакти майстра по заявці #{order_id}</b>\n\n"
-            f"Ім'я: {name}\n"
-            f"📞 Телефон: {phone}\n\n"
-            "Контакти відкрито. Можете дзвонити напряму або написати через ✉️ у боті."
-        )
-
     async def share_contacts_after_choose(call: types.CallbackQuery, order_id: int, offer_full):
         order_row = await get_order_row(order_id)
 
+        # Клієнту -> контакти майстра + красивий підсумок
         try:
             await dp.bot.send_message(
                 call.from_user.id,
-                build_master_contact_text(offer_full, order_id),
+                client_master_selected_text(
+                    master_name=_safe_val(offer_full, "name", "Майстер"),
+                    phone=_safe_val(offer_full, "phone", "—"),
+                    rating=_safe_val(offer_full, "rating"),
+                    reviews_count=_safe_val(offer_full, "reviews_count"),
+                    eta=_safe_val(offer_full, "eta"),
+                ),
                 reply_markup=client_order_actions_inline(order_id, "matched"),
             )
         except Exception as e:
-            logger.warning("Не вдалося надіслати контакти майстра клієнту %s: %s", call.from_user.id, e)
+            logger.warning(
+                "Не вдалося надіслати контакти майстра клієнту %s: %s",
+                call.from_user.id,
+                e,
+            )
 
+        # Майстру -> контакти клієнта
         try:
             await dp.bot.send_message(
                 offer_full["master_user_id"],
@@ -132,7 +146,11 @@ def register(dp):
                 reply_markup=selected_order_master_actions(order_id),
             )
         except Exception as e:
-            logger.warning("Не вдалося надіслати контакти клієнта майстру %s: %s", offer_full["master_user_id"], e)
+            logger.warning(
+                "Не вдалося надіслати контакти клієнта майстру %s: %s",
+                offer_full["master_user_id"],
+                e,
+            )
 
     async def start_dialog_write(
         message_or_call,
@@ -142,6 +160,7 @@ def register(dp):
         role: str,
         target_user_id: int,
         chat_id: int,
+        is_client: bool,
     ):
         await state.finish()
         await state.update_data(
@@ -152,17 +171,17 @@ def register(dp):
         )
         await ChatFlow.message.set()
 
-        text = (
-            f"✉️ <b>Повідомлення по заявці #{order_id}</b>\n\n"
-            "Надішліть одне повідомлення, фото або відео.\n"
-            "Після відправки режим автоматично закриється."
-        )
+        text = chat_open_text(order_id, is_client=is_client)
 
         if isinstance(message_or_call, types.CallbackQuery):
             await message_or_call.message.answer(text, reply_markup=chat_reply_kb())
             await message_or_call.answer()
         else:
             await message_or_call.answer(text, reply_markup=chat_reply_kb())
+
+    # =========================
+    # OFFERS FLOW
+    # =========================
 
     @dp.callback_query_handler(lambda c: c.data.startswith("offer_start_"), state="*")
     async def offer_start(call: types.CallbackQuery, state: FSMContext):
@@ -183,7 +202,10 @@ def register(dp):
         current_ts = now_ts()
         if current_ts - last_offer_at < settings.master_offer_cooldown:
             left = settings.master_offer_cooldown - (current_ts - last_offer_at)
-            await call.answer(f"Зачекайте {left} сек перед новим відгуком.", show_alert=True)
+            await call.answer(
+                f"Зачекайте {left} сек перед новим відгуком.",
+                show_alert=True,
+            )
             return
 
         order = await fetchrow(
@@ -269,7 +291,8 @@ def register(dp):
         await state.update_data(offer_eta=eta)
         await OfferCreate.comment.set()
         await message.answer(
-            "📝 <b>Коментар</b>\n\nНапишіть короткий коментар або <b>пропустити</b>.",
+            "📝 <b>Коментар</b>\n\n"
+            "Напишіть короткий коментар або <b>пропустити</b>.",
             reply_markup=back_menu_kb(),
         )
 
@@ -331,7 +354,11 @@ def register(dp):
             try:
                 await send_offer_to_client(order["user_id"], order_id, offer_id)
             except Exception as e:
-                logger.warning("Не вдалося надіслати оффер клієнту по заявці %s: %s", order_id, e)
+                logger.warning(
+                    "Не вдалося надіслати оффер клієнту по заявці %s: %s",
+                    order_id,
+                    e,
+                )
 
         await state.finish()
         await message.answer(
@@ -353,30 +380,21 @@ def register(dp):
         order_id = int(selected_offer["order_id"])
         order = await get_order_row(order_id)
 
-        await call.message.answer(
-            "✅ <b>Майстра обрано</b>\n\n"
-            "Контакти відкрито.\n"
-            "Тепер ви можете:\n"
-            "• зателефонувати напряму\n"
-            "• написати через ✉️ у боті\n"
-            "• переглянути історію діалогу\n"
-            "• залишити скаргу, якщо виникне проблема",
-            reply_markup=client_order_actions_inline(order_id, "matched"),
-        )
-
         if offer_full:
             await share_contacts_after_choose(call, order_id, offer_full)
 
             try:
                 await dp.bot.send_message(
                     offer_full["master_user_id"],
-                    f"🎉 <b>Вашу пропозицію обрано по заявці #{order_id}</b>\n\n"
-                    "Контакти клієнта відкрито.\n"
-                    "Тепер ви можете зв'язатися напряму або написати через ✉️ у боті.",
+                    master_selected_for_master_text(order_id),
                     reply_markup=selected_order_master_actions(order_id),
                 )
             except Exception as e:
-                logger.warning("Не вдалося повідомити майстра про вибір оффера %s: %s", offer_id, e)
+                logger.warning(
+                    "Не вдалося повідомити майстра про вибір оффера %s: %s",
+                    offer_id,
+                    e,
+                )
 
         if order:
             try:
@@ -386,9 +404,17 @@ def register(dp):
                     reply_markup=client_order_actions_inline(order_id, "matched"),
                 )
             except Exception as e:
-                logger.warning("Не вдалося повідомити клієнта по заявці %s: %s", order_id, e)
+                logger.warning(
+                    "Не вдалося повідомити клієнта по заявці %s: %s",
+                    order_id,
+                    e,
+                )
 
         await call.answer("Пропозицію обрано")
+
+    # =========================
+    # DIALOG BY ORDER
+    # =========================
 
     @dp.callback_query_handler(lambda c: c.data.startswith("client_chat_"), state="*")
     async def client_dialog_start(call: types.CallbackQuery, state: FSMContext):
@@ -423,6 +449,7 @@ def register(dp):
             role="client",
             target_user_id=chat["master_user_id"],
             chat_id=chat["id"],
+            is_client=True,
         )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("master_chat_open_"), state="*")
@@ -459,6 +486,7 @@ def register(dp):
             role="master",
             target_user_id=chat["client_user_id"],
             chat_id=chat["id"],
+            is_client=False,
         )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("chat_history_"), state="*")
@@ -533,7 +561,8 @@ def register(dp):
                 )
                 await state.finish()
                 await message.answer(
-                    "✅ <b>Фото надіслано</b>\n\nЩоб написати ще — знову натисніть ✉️ по заявці.",
+                    "✅ <b>Фото надіслано</b>\n\n"
+                    "Щоб написати ще — знову натисніть ✉️ по заявці.",
                     reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
                 )
                 return
@@ -557,7 +586,8 @@ def register(dp):
                 )
                 await state.finish()
                 await message.answer(
-                    "✅ <b>Відео надіслано</b>\n\nЩоб написати ще — знову натисніть ✉️ по заявці.",
+                    "✅ <b>Відео надіслано</b>\n\n"
+                    "Щоб написати ще — знову натисніть ✉️ по заявці.",
                     reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
                 )
                 return
@@ -586,7 +616,8 @@ def register(dp):
             )
             await state.finish()
             await message.answer(
-                "✅ <b>Повідомлення надіслано</b>\n\nЩоб написати ще — знову натисніть ✉️ по заявці.",
+                "✅ <b>Повідомлення надіслано</b>\n\n"
+                "Щоб написати ще — знову натисніть ✉️ по заявці.",
                 reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
             )
 
