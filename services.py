@@ -1,21 +1,13 @@
 import logging
 from aiogram import Bot
 
-from constants import category_label
+from constants import category_label, status_label
 from keyboards import admin_order_actions_inline, order_card_master_actions
 from repositories import get_chat_for_order, get_master_name
 from ui_texts import master_card_text
 
 
-STATUS_LABELS = {
-    "new": "Нова",
-    "offered": "Є пропозиції",
-    "matched": "Майстра обрано",
-    "in_progress": "В роботі",
-    "done": "Завершена",
-    "cancelled": "Скасована",
-    "expired": "Прострочена",
-}
+logger = logging.getLogger(__name__)
 
 
 def safe_val(row, key, default=None):
@@ -24,10 +16,6 @@ def safe_val(row, key, default=None):
         return default if value is None else value
     except Exception:
         return default
-
-
-def order_status_label(status: str) -> str:
-    return STATUS_LABELS.get(status, status or "-")
 
 
 async def send_master_card(
@@ -50,7 +38,7 @@ async def send_master_card(
             )
             return
         except Exception as e:
-            logging.warning("Не вдалося надіслати фото майстра в чат %s: %s", chat_id, e)
+            logger.warning("Не вдалося надіслати фото майстра в чат %s: %s", chat_id, e)
 
     await bot.send_message(chat_id, text, reply_markup=reply_markup)
 
@@ -65,7 +53,7 @@ async def send_order_card(
     category = safe_val(order_row, "category", "-")
     district = safe_val(order_row, "district", "-")
     problem = safe_val(order_row, "problem", "-")
-    status = order_status_label(safe_val(order_row, "status", "-"))
+    status = status_label(safe_val(order_row, "status", "-"))
 
     text = (
         f"{title}\n\n"
@@ -98,14 +86,14 @@ async def send_order_card(
                 )
                 return
 
-            logging.warning(
+            logger.warning(
                 "Невідомий media_type '%s' для заявки %s",
                 media_type,
                 safe_val(order_row, "id", "?"),
             )
         except Exception as e:
-            logging.warning(
-                "Не вдалося надіслати медіа по заявці %s в чат %s: %s",
+            logger.warning(
+                "Не вдалося надіслати медіа за заявкою %s в чат %s: %s",
                 safe_val(order_row, "id", "?"),
                 chat_id,
                 e,
@@ -141,7 +129,7 @@ async def send_admin_order_detail(bot: Bot, chat_id: int, order, offers):
         f"🛠 <b>Категорія:</b> {category_label(safe_val(order, 'category', '-')) if safe_val(order, 'category') else '-'}\n"
         f"📍 <b>Район / адреса:</b> {safe_val(order, 'district', '—')}\n"
         f"📝 <b>Опис:</b> {safe_val(order, 'problem', '—')}\n"
-        f"📌 <b>Статус:</b> {order_status_label(safe_val(order, 'status', '-'))}\n"
+        f"📌 <b>Статус:</b> {status_label(safe_val(order, 'status', '-'))}\n"
         f"💬 <b>Чат:</b> {chat_info}\n"
         f"📷 <b>Медіа:</b> {media_info}\n"
         f"👷 <b>Обраний майстер:</b> {selected_master_name}\n"
@@ -173,7 +161,7 @@ async def send_admin_order_detail(bot: Bot, chat_id: int, order, offers):
                 )
                 return
         except Exception as e:
-            logging.warning("Не вдалося надіслати деталі заявки %s з медіа: %s", order_id, e)
+            logger.warning("Не вдалося надіслати деталі заявки %s з медіа: %s", order_id, e)
 
     await bot.send_message(
         chat_id,
@@ -204,9 +192,13 @@ async def notify_masters_about_order(bot: Bot, order_row, masters):
             )
             sent_count += 1
         except Exception as e:
-            logging.warning("Помилка повідомлення майстру %s: %s", master_user_id, e)
+            logger.warning("Помилка повідомлення майстру %s: %s", master_user_id, e)
 
-    logging.info("Розсилка по заявці %s завершена. Надіслано: %s", safe_val(order_row, "id"), sent_count)
+    logger.info(
+        "Розсилка за заявкою %s завершена. Надіслано: %s",
+        safe_val(order_row, "id"),
+        sent_count,
+    )
 
 
 async def notify_admin_about_order(bot: Bot, admin_id: int, order_row):
@@ -218,19 +210,19 @@ async def notify_admin_about_order(bot: Bot, admin_id: int, order_row):
             title="📦 <b>Нова заявка клієнта</b>",
         )
     except Exception as e:
-        logging.warning("Помилка повідомлення адміну: %s", e)
+        logger.warning("Помилка повідомлення адміну: %s", e)
 
 
 async def send_chat_history(bot: Bot, chat_id: int, order_id: int, messages):
     if not messages:
         await bot.send_message(
             chat_id,
-            f"📜 <b>Історія чату по заявці #{order_id}</b>\n\nПовідомлень поки немає.",
+            f"📜 <b>Історія чату за заявкою #{order_id}</b>\n\nПовідомлень поки немає.",
         )
         return
 
     lines = [
-        f"📜 <b>Історія чату по заявці #{order_id}</b>\n\nПоказано повідомлень: {len(messages)}",
+        f"📜 <b>Історія чату за заявкою #{order_id}</b>\n\nПоказано повідомлень: {len(messages)}",
         "",
     ]
 
