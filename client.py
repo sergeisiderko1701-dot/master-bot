@@ -3,6 +3,7 @@ import re
 
 from aiogram import types
 from aiogram.dispatcher import FSMContext
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 from config import settings
 from constants import CATEGORY_LABEL_TO_VALUE, category_label
@@ -72,6 +73,13 @@ def normalize_phone(value: str) -> str:
 
 def is_valid_phone(value: str) -> bool:
     return bool(re.fullmatch(r"\+380\d{9}", value))
+
+
+def request_contact_kb():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.add(KeyboardButton("📲 Поділитися номером", request_contact=True))
+    kb.add(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
+    return kb
 
 
 def register(dp):
@@ -222,19 +230,65 @@ def register(dp):
         await ClientCreateOrder.phone.set()
         await message.answer(
             "📞 <b>Ваш номер телефону</b>\n\n"
-            "Напишіть номер у форматі <b>+380XXXXXXXXX</b>.\n"
-            "Після вибору майстра ми відкриємо контакти обом сторонам.",
+            "Можете:\n"
+            "• натиснути кнопку <b>📲 Поділитися номером</b>\n"
+            "• або написати номер вручну у форматі <b>+380XXXXXXXXX</b>\n\n"
+            "Ми покажемо його тільки тому майстру, якого ви самі оберете.",
+            reply_markup=request_contact_kb(),
+        )
+
+    @dp.message_handler(state=ClientCreateOrder.phone, content_types=types.ContentTypes.CONTACT)
+    async def client_order_phone_contact(message: types.Message, state: FSMContext):
+        if not message.contact:
+            await message.answer(
+                "Не вдалося отримати контакт. Спробуйте ще раз.",
+                reply_markup=request_contact_kb(),
+            )
+            return
+
+        phone = normalize_phone(message.contact.phone_number)
+
+        if not is_valid_phone(phone):
+            await message.answer(
+                "Номер із контакту виглядає некоректно. Надішліть правильний номер або введіть вручну у форматі <b>+380XXXXXXXXX</b>.",
+                reply_markup=request_contact_kb(),
+            )
+            return
+
+        await state.update_data(client_phone=phone)
+        await ClientCreateOrder.media.set()
+        await message.answer(
+            ask_media_text(),
             reply_markup=back_menu_kb(),
         )
 
     @dp.message_handler(state=ClientCreateOrder.phone, content_types=types.ContentTypes.TEXT)
-    async def client_order_phone(message: types.Message, state: FSMContext):
-        phone = normalize_phone(message.text)
+    async def client_order_phone_text(message: types.Message, state: FSMContext):
+        text = (message.text or "").strip()
+
+        if text in BACK_BUTTONS:
+            category = (await state.get_data()).get("client_category")
+            await state.finish()
+
+            if category:
+                await state.update_data(client_category=category)
+                await message.answer(
+                    client_actions_text(category),
+                    reply_markup=client_actions_kb(),
+                )
+            else:
+                await message.answer(
+                    choose_category_text(),
+                    reply_markup=categories_kb(),
+                )
+            return
+
+        phone = normalize_phone(text)
 
         if not is_valid_phone(phone):
             await message.answer(
-                "Введіть коректний номер у форматі <b>+380XXXXXXXXX</b>.",
-                reply_markup=back_menu_kb(),
+                "Введіть коректний номер у форматі <b>+380XXXXXXXXX</b> або натисніть кнопку <b>📲 Поділитися номером</b>.",
+                reply_markup=request_contact_kb(),
             )
             return
 
@@ -426,7 +480,7 @@ def register(dp):
 
         await call.message.answer(
             f"📬 <b>Пропозиції по заявці #{order_id}</b>\n\n"
-            f"Оберіть майстра, який підходить найкраще 👇"
+            "Оберіть майстра, який підходить найкраще 👇"
         )
 
         for offer in offers:
