@@ -51,8 +51,8 @@ def categories_kb():
 def client_actions_kb():
     kb = _reply_kb()
     kb.add(KeyboardButton("📨 Створити заявку"))
-    kb.add(KeyboardButton("👷 Переглянути майстрів"))
     kb.add(KeyboardButton("📦 Мої заявки"))
+    kb.add(KeyboardButton("👷 Переглянути майстрів"))
     kb.add(KeyboardButton("🔄 Змінити спеціальність"))
     kb.add(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
     return kb
