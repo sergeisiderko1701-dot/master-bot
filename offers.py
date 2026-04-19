@@ -99,7 +99,7 @@ def register(dp):
             f"{username_line}"
             f"Telegram: {tg_link}\n"
             f"ID: <code>{user.id}</code>\n\n"
-            f"Щоб бачити контакти клієнта, майстра було обрано по заявці."
+            f"Контакти відкрито після вибору майстра."
         )
 
     def build_master_contact_text(master_row, order_id: int) -> str:
@@ -114,11 +114,6 @@ def register(dp):
         )
 
     async def share_contacts_after_choose(call: types.CallbackQuery, order_id: int, offer_full):
-        """
-        У майбутньому саме тут додається комісія:
-        if not commission_paid:
-            return
-        """
         order_row = await get_order_row(order_id)
 
         try:
@@ -168,10 +163,6 @@ def register(dp):
             await message_or_call.answer()
         else:
             await message_or_call.answer(text, reply_markup=chat_reply_kb())
-
-    # =========================
-    # OFFERS FLOW
-    # =========================
 
     @dp.callback_query_handler(lambda c: c.data.startswith("offer_start_"), state="*")
     async def offer_start(call: types.CallbackQuery, state: FSMContext):
@@ -394,10 +385,6 @@ def register(dp):
                 logger.warning("Не вдалося повідомити клієнта по заявці %s: %s", order_id, e)
 
         await call.answer("Пропозицію обрано")
-
-    # =========================
-    # DIALOG BY ORDER
-    # =========================
 
     @dp.callback_query_handler(lambda c: c.data.startswith("client_chat_"), state="*")
     async def client_dialog_start(call: types.CallbackQuery, state: FSMContext):
