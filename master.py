@@ -2,7 +2,7 @@ from aiogram import types
 from aiogram.dispatcher import FSMContext
 
 from config import settings
-from constants import VALID_CATEGORIES, category_label, master_availability_label
+from constants import VALID_CATEGORIES, category_label
 from keyboards import (
     back_menu_kb,
     edit_profile_inline_kb,
@@ -24,7 +24,12 @@ from repositories import (
 )
 from services import send_master_card, send_order_card
 from states import MasterRegistration, ProfileEdit
-from ui_texts import ask_district_text
+from ui_texts import (
+    ask_district_text,
+    master_profile_text,
+    tip_master_offer,
+    tip_master_selected,
+)
 from utils import is_admin, normalize_text
 
 
@@ -88,22 +93,7 @@ def _validate_profile_field(field: str, message: types.Message):
 
 def register(dp):
     async def show_master_profile(message: types.Message, master_row):
-        text = (
-            f"👷 <b>Ваш профіль майстра</b>\n\n"
-            f"👤 Ім'я: {master_row['name']}\n"
-            f"🔧 Категорія: {category_label(master_row['category'])}\n"
-            f"📍 Район: {master_row['district'] or '-'}\n"
-            f"📞 Телефон: {master_row['phone'] or '-'}\n"
-            f"🧾 Про себе: {master_row['description'] or '-'}\n"
-            f"🛠 Досвід: {master_row['experience'] or '-'}\n"
-            f"⭐ Рейтинг: {float(master_row['rating'] or 0):.2f}\n"
-            f"💬 Відгуків: {master_row['reviews_count']}\n"
-            f"🟢 Статус: {master_availability_label(master_row['availability'])}\n\n"
-            f"ℹ️ <b>Пам'ятка</b>\n"
-            f"• нові заявки надходять тільки у вашу категорію\n"
-            f"• контакти клієнта відкриваються після того, як клієнт обере вас\n"
-            f"• якщо заявок немає — це не помилка, просто зараз немає нових звернень"
-        )
+        text = master_profile_text(master_row)
 
         if master_row["photo"]:
             try:
@@ -117,7 +107,10 @@ def register(dp):
         else:
             await message.answer(text)
 
-        await message.answer("👇 <b>Меню майстра</b>", reply_markup=master_menu_kb())
+        await message.answer(
+            "👇 <b>Меню майстра</b>",
+            reply_markup=master_menu_kb(),
+        )
 
     @dp.message_handler(lambda m: m.text in ["🔧 Майстер", "🔧 Я майстер"], state="*")
     async def master_entry(message: types.Message, state: FSMContext):
@@ -427,6 +420,7 @@ def register(dp):
             f"📦 <b>Нові заявки</b>\n\nКатегорія: {category_label(master['category'])}",
             reply_markup=master_menu_kb(),
         )
+        await message.answer(tip_master_offer())
 
         for row in rows[:20]:
             try:
@@ -466,6 +460,7 @@ def register(dp):
             "✅ <b>Ваші активні заявки</b>",
             reply_markup=master_menu_kb(),
         )
+        await message.answer(tip_master_selected())
 
         for row in rows[:20]:
             try:
