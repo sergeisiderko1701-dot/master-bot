@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from aiogram import types
@@ -21,7 +22,6 @@ from repositories import (
     fetch,
     fetchrow,
     get_master_by_id,
-    get_master_name,
     get_order_row,
     list_admin_masters,
     list_admin_orders,
@@ -36,13 +36,15 @@ from utils import is_admin, now_ts
 
 logger = logging.getLogger(__name__)
 PAGE_SIZE = settings.page_size
+BROADCAST_DELAY_SECONDS = 0.05
 
 
-class AdminSearchState(StatesGroup):
+class AdminPanelState(StatesGroup):
     order_id = State()
     user_id = State()
     master_user_id = State()
     support_reply = State()
+    broadcast_compose = State()
 
 
 STATUS_FILTER_MAP = {
@@ -70,7 +72,7 @@ def admin_menu_kb():
         ["🔎 Пошук заявки", "🔎 Пошук користувача"],
         ["🔎 Пошук майстра", "📦 Завислі заявки"],
         ["📝 Модерація майстрів", "👷 Майстри"],
-        ["⚠️ Скарги"],
+        ["⚠️ Скарги", "📣 СМС розсилка"],
         ["⬅️ Назад", "🏠 У меню"],
     ])
 
@@ -82,6 +84,14 @@ def admin_orders_filter_kb():
         ["🤝 Обрано майстра", "🛠 В роботі"],
         ["✅ Завершені", "❌ Скасовані"],
         ["⌛ Прострочені"],
+        ["⬅️ Назад", "🏠 У меню"],
+    ])
+
+
+def admin_broadcast_menu_kb():
+    return _reply_kb([
+        ["📣 Всім"],
+        ["📣 Майстрам", "📣 Клієнтам"],
         ["⬅️ Назад", "🏠 У меню"],
     ])
 
@@ -156,6 +166,15 @@ def support_reply_inline(user_id: int):
     return kb
 
 
+def broadcast_confirm_inline():
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("✅ Підтвердити", callback_data="admin_broadcast_confirm"),
+        InlineKeyboardButton("❌ Скасувати", callback_data="admin_broadcast_cancel"),
+    )
+    return kb
+
+
 def _master_summary_text(master_row, stats: dict) -> str:
     return (
         "📈 <b>Коротка статистика майстра</b>\n\n"
@@ -167,6 +186,73 @@ def _master_summary_text(master_row, stats: dict) -> str:
         f"⭐ Рейтинг: <b>{float(master_row['rating'] or 0):.2f}</b>\n"
         f"💬 Відгуків: <b>{master_row['reviews_count']}</b>"
     )
+
+
+def _broadcast_mode_label(mode: str) -> str:
+    if mode == "all":
+        return "всім користувачам"
+    if mode == "masters":
+        return "майстрам"
+    if mode == "clients":
+        return "клієнтам"
+    return mode
+
+
+async def _get_unique_recipient_ids(mode: str):
+    if mode == "masters":
+        rows = await fetch("SELECT DISTINCT user_id FROM masters WHERE user_id IS NOT NULL")
+        ids = [int(r["user_id"]) for r in rows if r["user_id"]]
+    elif mode == "clients":
+        rows = await fetch("SELECT DISTINCT user_id FROM orders WHERE user_id IS NOT NULL")
+        ids = [int(r["user_id"]) for r in rows if r["user_id"]]
+    else:
+        rows = await fetch(
+            """
+            SELECT DISTINCT user_id
+            FROM (
+                SELECT user_id FROM masters WHERE user_id IS NOT NULL
+                UNION
+                SELECT user_id FROM orders WHERE user_id IS NOT NULL
+            ) t
+            """
+        )
+        ids = [int(r["user_id"]) for r in rows if r["user_id"]]
+
+    ids = [uid for uid in ids if uid != settings.admin_id]
+    return sorted(set(ids))
+
+
+async def _user_statistics():
+    total_users_row = await fetchrow(
+        """
+        SELECT COUNT(*) AS c
+        FROM (
+            SELECT user_id FROM masters WHERE user_id IS NOT NULL
+            UNION
+            SELECT user_id FROM orders WHERE user_id IS NOT NULL
+        ) t
+        """
+    )
+    clients_row = await fetchrow("SELECT COUNT(DISTINCT user_id) AS c FROM orders WHERE user_id IS NOT NULL")
+    masters_row = await fetchrow("SELECT COUNT(DISTINCT user_id) AS c FROM masters WHERE user_id IS NOT NULL")
+    approved_masters_row = await fetchrow(
+        "SELECT COUNT(DISTINCT user_id) AS c FROM masters WHERE status='approved' AND user_id IS NOT NULL"
+    )
+    pending_masters_row = await fetchrow(
+        "SELECT COUNT(DISTINCT user_id) AS c FROM masters WHERE status='pending' AND user_id IS NOT NULL"
+    )
+    blocked_masters_row = await fetchrow(
+        "SELECT COUNT(DISTINCT user_id) AS c FROM masters WHERE status='blocked' AND user_id IS NOT NULL"
+    )
+
+    return {
+        "users_total": int(total_users_row["c"] or 0),
+        "clients_total": int(clients_row["c"] or 0),
+        "masters_total_users": int(masters_row["c"] or 0),
+        "masters_approved_users": int(approved_masters_row["c"] or 0),
+        "masters_pending_users": int(pending_masters_row["c"] or 0),
+        "masters_blocked_users": int(blocked_masters_row["c"] or 0),
+    }
 
 
 def register(dp):
@@ -301,7 +387,11 @@ def register(dp):
             lines.append("• Історія подій ще не накопичується окремо.")
             lines.append("• Можна орієнтуватися по статусу, офферах, чатах і скаргах.")
 
-        await bot.send_message(chat_id, "\n".join(lines), reply_markup=admin_order_actions_inline(order_id, order["status"]))
+        await bot.send_message(
+            chat_id,
+            "\n".join(lines),
+            reply_markup=admin_order_actions_inline(order_id, order["status"]),
+        )
 
     async def _show_stale_orders(chat_id: int, bot):
         now = now_ts()
@@ -414,24 +504,103 @@ def register(dp):
         )
         await bot.send_message(chat_id, _master_summary_text(row, stats), reply_markup=admin_menu_kb())
 
+    async def _preview_broadcast(call_or_message, state: FSMContext, content_type: str, text: str = None, file_id: str = None):
+        data = await state.get_data()
+        mode = data.get("broadcast_mode")
+        recipients_count = int(data.get("broadcast_recipients_count") or 0)
+
+        await state.update_data(
+            broadcast_content_type=content_type,
+            broadcast_text=text,
+            broadcast_file_id=file_id,
+        )
+
+        preview_text = (
+            "📣 <b>Підтвердження розсилки</b>\n\n"
+            f"👥 Одержувачі: <b>{_broadcast_mode_label(mode)}</b>\n"
+            f"📊 Кількість: <b>{recipients_count}</b>\n"
+            f"🧾 Тип: <b>{content_type}</b>\n\n"
+            "Підтвердити відправку?"
+        )
+
+        if isinstance(call_or_message, types.Message):
+            if content_type == "text":
+                await call_or_message.answer(
+                    f"{preview_text}\n\n💬 <b>Текст:</b>\n{text}",
+                    reply_markup=broadcast_confirm_inline(),
+                )
+            elif content_type == "photo":
+                await call_or_message.answer_photo(
+                    file_id,
+                    caption=f"{preview_text}\n\n💬 <b>Підпис:</b>\n{text or '—'}",
+                    reply_markup=broadcast_confirm_inline(),
+                )
+            elif content_type == "video":
+                await call_or_message.answer_video(
+                    file_id,
+                    caption=f"{preview_text}\n\n💬 <b>Підпис:</b>\n{text or '—'}",
+                    reply_markup=broadcast_confirm_inline(),
+                )
+        else:
+            await call_or_message.message.answer(
+                preview_text,
+                reply_markup=broadcast_confirm_inline(),
+            )
+
+    async def _run_broadcast(bot, admin_chat_id: int, mode: str, content_type: str, text: str = None, file_id: str = None):
+        recipient_ids = await _get_unique_recipient_ids(mode)
+        sent_count = 0
+        failed_count = 0
+
+        for uid in recipient_ids:
+            try:
+                if content_type == "text":
+                    await bot.send_message(uid, text or "")
+                elif content_type == "photo":
+                    await bot.send_photo(uid, file_id, caption=text or None)
+                elif content_type == "video":
+                    await bot.send_video(uid, file_id, caption=text or None)
+                else:
+                    failed_count += 1
+                    continue
+
+                sent_count += 1
+                await asyncio.sleep(BROADCAST_DELAY_SECONDS)
+            except Exception:
+                failed_count += 1
+
+        await bot.send_message(
+            admin_chat_id,
+            "✅ <b>Розсилку завершено</b>\n\n"
+            f"👥 Аудиторія: <b>{_broadcast_mode_label(mode)}</b>\n"
+            f"📤 Надіслано: <b>{sent_count}</b>\n"
+            f"⚠️ Помилок: <b>{failed_count}</b>",
+            reply_markup=admin_menu_kb(),
+        )
+
     # =========================
     # ADMIN ROOT
     # =========================
 
     @dp.message_handler(lambda m: m.text == "👑 Адмін", state="*")
-    async def admin_menu(message: types.Message, state: FSMContext):
+    async def admin_root(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             return
 
         await state.finish()
 
         stats = await admin_stats()
+        user_stats = await _user_statistics()
+
         text = (
             "👑 <b>Адмін-панель 2.0</b>\n\n"
             f"📝 На модерації майстрів: <b>{stats['masters_pending']}</b>\n"
             f"🆕 Нових заявок: <b>{stats['orders_new']}</b>\n"
             f"📬 Заявок з пропозиціями: <b>{stats['orders_offered']}</b>\n"
             f"🛠 В роботі: <b>{stats['orders_progress']}</b>\n\n"
+            f"👥 Унікальних користувачів: <b>{user_stats['users_total']}</b>\n"
+            f"👤 Клієнтів: <b>{user_stats['clients_total']}</b>\n"
+            f"👷 Майстрів: <b>{user_stats['masters_total_users']}</b>\n\n"
             "Оберіть розділ нижче 👇"
         )
         await message.answer(text, reply_markup=admin_menu_kb())
@@ -442,9 +611,17 @@ def register(dp):
             return
 
         stats = await admin_stats()
+        user_stats = await _user_statistics()
+
         text = (
             "📊 <b>Статистика</b>\n\n"
-            f"👷 Всього майстрів: <b>{stats['masters_total']}</b>\n"
+            f"👥 Всього унікальних користувачів: <b>{user_stats['users_total']}</b>\n"
+            f"👤 Клієнтів: <b>{user_stats['clients_total']}</b>\n"
+            f"👷 Майстрів: <b>{user_stats['masters_total_users']}</b>\n"
+            f"✅ Підтверджених майстрів: <b>{user_stats['masters_approved_users']}</b>\n"
+            f"⏳ На перевірці: <b>{user_stats['masters_pending_users']}</b>\n"
+            f"🚫 Заблокованих майстрів: <b>{user_stats['masters_blocked_users']}</b>\n\n"
+            f"👷 Всього записів майстрів: <b>{stats['masters_total']}</b>\n"
             f"✅ Підтверджених: <b>{stats['masters_approved']}</b>\n"
             f"⏳ На перевірці: <b>{stats['masters_pending']}</b>\n"
             f"🚫 Заблокованих: <b>{stats['masters_blocked']}</b>\n\n"
@@ -464,6 +641,144 @@ def register(dp):
         if not is_admin(message.from_user.id):
             return
         await admin_statistics_command(message, state)
+
+    # =========================
+    # BROADCAST
+    # =========================
+
+    @dp.message_handler(lambda m: m.text == "📣 СМС розсилка", state="*")
+    async def broadcast_menu(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await state.finish()
+        await message.answer(
+            "📣 <b>СМС розсилка</b>\n\n"
+            "Оберіть аудиторію для розсилки.",
+            reply_markup=admin_broadcast_menu_kb(),
+        )
+
+    @dp.message_handler(lambda m: m.text in {"📣 Всім", "📣 Майстрам", "📣 Клієнтам"}, state="*")
+    async def broadcast_choose_audience(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+
+        mode_map = {
+            "📣 Всім": "all",
+            "📣 Майстрам": "masters",
+            "📣 Клієнтам": "clients",
+        }
+        mode = mode_map[message.text]
+        recipient_ids = await _get_unique_recipient_ids(mode)
+
+        await state.finish()
+        await state.update_data(
+            broadcast_mode=mode,
+            broadcast_recipients_count=len(recipient_ids),
+        )
+        await AdminPanelState.broadcast_compose.set()
+
+        await message.answer(
+            "📣 <b>Створення розсилки</b>\n\n"
+            f"👥 Аудиторія: <b>{_broadcast_mode_label(mode)}</b>\n"
+            f"📊 Одержувачів: <b>{len(recipient_ids)}</b>\n\n"
+            "Надішліть одним повідомленням:\n"
+            "• текст\n"
+            "• або фото з підписом\n"
+            "• або відео з підписом",
+            reply_markup=admin_broadcast_menu_kb(),
+        )
+
+    @dp.message_handler(state=AdminPanelState.broadcast_compose, content_types=types.ContentTypes.TEXT)
+    async def broadcast_compose_text(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish()
+            return
+
+        text = (message.text or "").strip()
+        if not text or text.startswith("📣 "):
+            await message.answer("Надішліть текст розсилки одним повідомленням.")
+            return
+
+        await _preview_broadcast(message, state, content_type="text", text=text)
+
+    @dp.message_handler(state=AdminPanelState.broadcast_compose, content_types=types.ContentTypes.PHOTO)
+    async def broadcast_compose_photo(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish()
+            return
+
+        file_id = message.photo[-1].file_id if message.photo else None
+        caption = message.caption or ""
+        if not file_id:
+            await message.answer("Не вдалося прочитати фото. Спробуйте ще раз.")
+            return
+
+        await _preview_broadcast(message, state, content_type="photo", text=caption, file_id=file_id)
+
+    @dp.message_handler(state=AdminPanelState.broadcast_compose, content_types=types.ContentTypes.VIDEO)
+    async def broadcast_compose_video(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish()
+            return
+
+        file_id = message.video.file_id if message.video else None
+        caption = message.caption or ""
+        if not file_id:
+            await message.answer("Не вдалося прочитати відео. Спробуйте ще раз.")
+            return
+
+        await _preview_broadcast(message, state, content_type="video", text=caption, file_id=file_id)
+
+    @dp.callback_query_handler(lambda c: c.data == "admin_broadcast_confirm", state="*")
+    async def broadcast_confirm(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            await call.answer()
+            return
+
+        data = await state.get_data()
+        mode = data.get("broadcast_mode")
+        content_type = data.get("broadcast_content_type")
+        text = data.get("broadcast_text")
+        file_id = data.get("broadcast_file_id")
+
+        if not mode or not content_type:
+            await state.finish()
+            await call.message.answer(
+                "Не вдалося підготувати розсилку.",
+                reply_markup=admin_menu_kb(),
+            )
+            await call.answer()
+            return
+
+        await call.message.answer(
+            "⏳ <b>Розсилку запущено</b>\n\n"
+            "Будь ласка, зачекайте завершення.",
+            reply_markup=admin_menu_kb(),
+        )
+        await call.answer("Запускаю")
+
+        await _run_broadcast(
+            dp.bot,
+            call.message.chat.id,
+            mode=mode,
+            content_type=content_type,
+            text=text,
+            file_id=file_id,
+        )
+        await state.finish()
+
+    @dp.callback_query_handler(lambda c: c.data == "admin_broadcast_cancel", state="*")
+    async def broadcast_cancel(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            await call.answer()
+            return
+
+        await state.finish()
+        await call.message.answer(
+            "❌ <b>Розсилку скасовано</b>",
+            reply_markup=admin_menu_kb(),
+        )
+        await call.answer("Скасовано")
 
     # =========================
     # MASTERS
@@ -759,13 +1074,13 @@ def register(dp):
         if not is_admin(message.from_user.id):
             return
         await state.finish()
-        await AdminSearchState.order_id.set()
+        await AdminPanelState.order_id.set()
         await message.answer(
             "🔎 <b>Пошук заявки</b>\n\nВведіть ID заявки числом.",
             reply_markup=admin_menu_kb(),
         )
 
-    @dp.message_handler(state=AdminSearchState.order_id, content_types=types.ContentTypes.TEXT)
+    @dp.message_handler(state=AdminPanelState.order_id, content_types=types.ContentTypes.TEXT)
     async def search_order_finish(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             await state.finish()
@@ -793,13 +1108,13 @@ def register(dp):
         if not is_admin(message.from_user.id):
             return
         await state.finish()
-        await AdminSearchState.user_id.set()
+        await AdminPanelState.user_id.set()
         await message.answer(
             "🔎 <b>Пошук користувача</b>\n\nВведіть user_id клієнта.",
             reply_markup=admin_menu_kb(),
         )
 
-    @dp.message_handler(state=AdminSearchState.user_id, content_types=types.ContentTypes.TEXT)
+    @dp.message_handler(state=AdminPanelState.user_id, content_types=types.ContentTypes.TEXT)
     async def search_user_finish(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             await state.finish()
@@ -847,13 +1162,13 @@ def register(dp):
         if not is_admin(message.from_user.id):
             return
         await state.finish()
-        await AdminSearchState.master_user_id.set()
+        await AdminPanelState.master_user_id.set()
         await message.answer(
             "🔎 <b>Пошук майстра</b>\n\nВведіть user_id майстра.",
             reply_markup=admin_menu_kb(),
         )
 
-    @dp.message_handler(state=AdminSearchState.master_user_id, content_types=types.ContentTypes.TEXT)
+    @dp.message_handler(state=AdminPanelState.master_user_id, content_types=types.ContentTypes.TEXT)
     async def search_master_finish(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             await state.finish()
@@ -947,7 +1262,7 @@ def register(dp):
         user_id = int(call.data.split("_")[-1])
         await state.finish()
         await state.update_data(support_target_user_id=user_id)
-        await AdminSearchState.support_reply.set()
+        await AdminPanelState.support_reply.set()
 
         await call.message.answer(
             f"↩️ <b>Відповідь користувачу</b>\n\n"
@@ -957,7 +1272,7 @@ def register(dp):
         )
         await call.answer()
 
-    @dp.message_handler(state=AdminSearchState.support_reply, content_types=types.ContentTypes.TEXT)
+    @dp.message_handler(state=AdminPanelState.support_reply, content_types=types.ContentTypes.TEXT)
     async def support_reply_send(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             await state.finish()
