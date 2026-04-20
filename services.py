@@ -3,7 +3,7 @@ from aiogram import Bot
 
 from constants import category_label, status_label
 from keyboards import admin_order_actions_inline, order_card_master_actions
-from repositories import get_chat_for_order, get_master_name
+from repositories import execute, get_chat_for_order, get_master_name
 from ui_texts import master_card_text
 
 
@@ -16,6 +16,40 @@ def safe_val(row, key, default=None):
         return default if value is None else value
     except Exception:
         return default
+
+
+async def clear_broken_order_media(order_id: int):
+    if not order_id:
+        return
+
+    try:
+        await execute(
+            """
+            UPDATE orders
+            SET media_type=NULL,
+                media_file_id=NULL,
+                updated_at=COALESCE(updated_at, 0)
+            WHERE id=$1
+            """,
+            order_id,
+        )
+        logger.warning("Broken media cleared for order %s", order_id)
+    except Exception as e:
+        logger.exception("Failed to clear broken media for order %s: %s", order_id, e)
+
+
+def is_invalid_file_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    markers = [
+        "wrong file identifier",
+        "wrong file_id",
+        "wrong remote file identifier",
+        "failed to get http url content",
+        "bad request: wrong file identifier",
+        "invalid file http url specified",
+        "wrong type of the web page content",
+    ]
+    return any(marker in text for marker in markers)
 
 
 async def send_master_card(
@@ -50,6 +84,7 @@ async def send_order_card(
     title: str = "📄 Ваша заявка",
     reply_markup=None,
 ):
+    order_id = safe_val(order_row, "id")
     category = safe_val(order_row, "category", "-")
     district = safe_val(order_row, "district", "-")
     problem = safe_val(order_row, "problem", "-")
@@ -89,15 +124,18 @@ async def send_order_card(
             logger.warning(
                 "Невідомий media_type '%s' для заявки %s",
                 media_type,
-                safe_val(order_row, "id", "?"),
+                order_id or "?",
             )
         except Exception as e:
             logger.warning(
                 "Не вдалося надіслати медіа за заявкою %s в чат %s: %s",
-                safe_val(order_row, "id", "?"),
+                order_id or "?",
                 chat_id,
                 e,
             )
+
+            if is_invalid_file_error(e):
+                await clear_broken_order_media(order_id)
 
     await bot.send_message(chat_id, text, reply_markup=reply_markup)
 
@@ -162,6 +200,9 @@ async def send_admin_order_detail(bot: Bot, chat_id: int, order, offers):
                 return
         except Exception as e:
             logger.warning("Не вдалося надіслати деталі заявки %s з медіа: %s", order_id, e)
+
+            if is_invalid_file_error(e):
+                await clear_broken_order_media(order_id)
 
     await bot.send_message(
         chat_id,
