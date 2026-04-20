@@ -1,21 +1,23 @@
+import logging
+
 from aiogram import types
 from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
 from config import settings
 from constants import status_label
-from keyboards import (
-    admin_master_card_inline,
-    admin_menu_kb,
-    admin_order_actions_inline,
-    admin_orders_filter_kb,
-    admin_pending_master_inline,
-    main_menu_kb,
-    pagination_inline,
-)
+from keyboards import main_menu_kb
 from repositories import (
     admin_stats,
     close_chat,
     delete_master_by_id,
+    execute,
     fetch,
     fetchrow,
     get_master_by_id,
@@ -29,11 +31,18 @@ from repositories import (
     set_order_status,
 )
 from services import send_admin_order_detail, send_master_card, send_order_card
-from states import SupportReply
-from utils import is_admin
+from utils import is_admin, now_ts
 
 
+logger = logging.getLogger(__name__)
 PAGE_SIZE = settings.page_size
+
+
+class AdminSearchState(StatesGroup):
+    order_id = State()
+    user_id = State()
+    master_user_id = State()
+    support_reply = State()
 
 
 STATUS_FILTER_MAP = {
@@ -48,64 +57,119 @@ STATUS_FILTER_MAP = {
 }
 
 
+def _reply_kb(rows):
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    for row in rows:
+        kb.row(*[KeyboardButton(text) for text in row])
+    return kb
+
+
+def admin_menu_kb():
+    return _reply_kb([
+        ["📊 Статистика", "📦 Заявки"],
+        ["🔎 Пошук заявки", "🔎 Пошук користувача"],
+        ["🔎 Пошук майстра", "📦 Завислі заявки"],
+        ["📝 Модерація майстрів", "👷 Майстри"],
+        ["⚠️ Скарги"],
+        ["⬅️ Назад", "🏠 У меню"],
+    ])
+
+
+def admin_orders_filter_kb():
+    return _reply_kb([
+        ["📋 Усі заявки"],
+        ["🆕 Нові", "📬 Є пропозиції"],
+        ["🤝 Обрано майстра", "🛠 В роботі"],
+        ["✅ Завершені", "❌ Скасовані"],
+        ["⌛ Прострочені"],
+        ["⬅️ Назад", "🏠 У меню"],
+    ])
+
+
+def pagination_inline(prefix: str, page: int, has_prev: bool, has_next: bool):
+    kb = InlineKeyboardMarkup(row_width=2)
+    row = []
+
+    if has_prev:
+        row.append(InlineKeyboardButton("⬅️ Попередня", callback_data=f"{prefix}_{page-1}"))
+    if has_next:
+        row.append(InlineKeyboardButton("Наступна ➡️", callback_data=f"{prefix}_{page+1}"))
+
+    if row:
+        kb.add(*row)
+        return kb
+
+    return None
+
+
+def admin_pending_master_inline(master_id: int):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("✅ Підтвердити", callback_data=f"admin_approve_master_{master_id}"))
+    kb.add(InlineKeyboardButton("❌ Відхилити", callback_data=f"admin_reject_master_{master_id}"))
+    return kb
+
+
+def admin_master_card_inline(master_id: int, status: str):
+    kb = InlineKeyboardMarkup(row_width=1)
+
+    if status == "approved":
+        kb.add(InlineKeyboardButton("🚫 Заблокувати", callback_data=f"admin_block_master_{master_id}"))
+    elif status == "blocked":
+        kb.add(InlineKeyboardButton("✅ Розблокувати", callback_data=f"admin_unblock_master_{master_id}"))
+
+    kb.add(InlineKeyboardButton("🗑 Видалити майстра", callback_data=f"admin_delete_master_{master_id}"))
+    return kb
+
+
+def admin_order_actions_inline(order_id: int, status: str):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("📄 Деталі заявки", callback_data=f"admin_order_detail_{order_id}"))
+    kb.add(InlineKeyboardButton("🧾 Історія заявки", callback_data=f"admin_order_history_{order_id}"))
+    kb.add(InlineKeyboardButton("📜 Історія діалогу", callback_data=f"chat_history_{order_id}"))
+
+    if status in {"new", "offered", "matched", "in_progress"}:
+        kb.add(InlineKeyboardButton("❌ Закрити як неактуальну", callback_data=f"admin_expire_order_{order_id}"))
+
+    if status == "matched":
+        kb.add(InlineKeyboardButton("🛠 Позначити 'в роботі'", callback_data=f"admin_progress_order_{order_id}"))
+
+    if status in {"matched", "in_progress"}:
+        kb.add(InlineKeyboardButton("🏁 Завершити", callback_data=f"admin_done_order_{order_id}"))
+
+    if status in {"offered", "matched", "in_progress"}:
+        kb.add(InlineKeyboardButton("🔄 Повернути в нові", callback_data=f"admin_reset_order_{order_id}"))
+
+    return kb
+
+
+def admin_complaint_actions_inline(complaint_id: int, order_id: int, against_user_id: int):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("📄 Відкрити заявку", callback_data=f"admin_order_detail_{order_id}"))
+    kb.add(InlineKeyboardButton("👷 Відкрити майстра", callback_data=f"admin_open_master_by_user_{against_user_id}"))
+    kb.add(InlineKeyboardButton("🗑 Видалити скаргу", callback_data=f"admin_delete_complaint_{complaint_id}"))
+    return kb
+
+
+def support_reply_inline(user_id: int):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("↩️ Відповісти", callback_data=f"support_reply_{user_id}"))
+    return kb
+
+
+def _master_summary_text(master_row, stats: dict) -> str:
+    return (
+        "📈 <b>Коротка статистика майстра</b>\n\n"
+        f"📦 Всього обраних заявок: <b>{stats['total_selected']}</b>\n"
+        f"✅ Завершених: <b>{stats['done']}</b>\n"
+        f"❌ Скасованих/прострочених: <b>{stats['closed_bad']}</b>\n"
+        f"🛠 Активних: <b>{stats['active']}</b>\n"
+        f"⚠️ Скарг: <b>{stats['complaints']}</b>\n"
+        f"⭐ Рейтинг: <b>{float(master_row['rating'] or 0):.2f}</b>\n"
+        f"💬 Відгуків: <b>{master_row['reviews_count']}</b>"
+    )
+
+
 def register(dp):
-    @dp.message_handler(lambda m: m.text == "👑 Адмін", state="*")
-    async def admin_menu(message: types.Message, state: FSMContext):
-        if not is_admin(message.from_user.id):
-            return
-
-        await state.finish()
-
-        stats = await admin_stats()
-        text = (
-            "👑 <b>Адмін-панель</b>\n\n"
-            f"📝 На модерації майстрів: <b>{stats['masters_pending']}</b>\n"
-            f"🆕 Нових заявок: <b>{stats['orders_new']}</b>\n"
-            f"📬 Заявок з пропозиціями: <b>{stats['orders_offered']}</b>\n"
-            f"🛠 В роботі: <b>{stats['orders_progress']}</b>\n\n"
-            "Оберіть розділ нижче 👇"
-        )
-        await message.answer(text, reply_markup=admin_menu_kb())
-
-    @dp.message_handler(lambda m: m.text == "📊 Статистика", state="*")
-    async def admin_statistics(message: types.Message, state: FSMContext):
-        if not is_admin(message.from_user.id):
-            return
-
-        stats = await admin_stats()
-        text = (
-            "📊 <b>Статистика</b>\n\n"
-            f"👷 Всього майстрів: <b>{stats['masters_total']}</b>\n"
-            f"✅ Підтверджених: <b>{stats['masters_approved']}</b>\n"
-            f"⏳ На перевірці: <b>{stats['masters_pending']}</b>\n"
-            f"🚫 Заблокованих: <b>{stats['masters_blocked']}</b>\n\n"
-            f"📦 Всього заявок: <b>{stats['orders_total']}</b>\n"
-            f"🆕 Нові: <b>{stats['orders_new']}</b>\n"
-            f"📬 Є пропозиції: <b>{stats['orders_offered']}</b>\n"
-            f"🤝 Обрано майстра: <b>{stats['orders_matched']}</b>\n"
-            f"🛠 В роботі: <b>{stats['orders_progress']}</b>\n"
-            f"✅ Завершені: <b>{stats['orders_done']}</b>\n"
-            f"❌ Скасовані: <b>{stats['orders_cancelled']}</b>\n"
-            f"⌛ Прострочені: <b>{stats['orders_expired']}</b>"
-        )
-        await message.answer(text, reply_markup=admin_menu_kb())
-
-    @dp.message_handler(lambda m: m.text == "📝 Модерація майстрів", state="*")
-    async def pending_masters(message: types.Message, state: FSMContext):
-        if not is_admin(message.from_user.id):
-            return
-        await _show_pending_masters(message.chat.id, 0, dp.bot)
-
-    @dp.callback_query_handler(lambda c: c.data.startswith("pending_masters_"), state="*")
-    async def pending_masters_page(call: types.CallbackQuery, state: FSMContext):
-        if not is_admin(call.from_user.id):
-            await call.answer()
-            return
-
-        page = int(call.data.split("_")[-1])
-        await _show_pending_masters(call.message.chat.id, page, dp.bot)
-        await call.answer()
-
     async def _show_pending_masters(chat_id: int, page: int, bot):
         offset = page * PAGE_SIZE
         rows, total = await list_pending_masters(PAGE_SIZE, offset)
@@ -130,6 +194,296 @@ def register(dp):
         nav = pagination_inline("pending_masters", page, has_prev, has_next)
         if nav:
             await bot.send_message(chat_id, "Навігація:", reply_markup=nav)
+
+    async def _show_admin_masters(chat_id: int, page: int, bot):
+        offset = page * PAGE_SIZE
+        rows, total = await list_admin_masters(PAGE_SIZE, offset)
+
+        if not rows:
+            await bot.send_message(chat_id, "Майстрів не знайдено.", reply_markup=admin_menu_kb())
+            return
+
+        await bot.send_message(chat_id, "👷 <b>Майстри</b>", reply_markup=admin_menu_kb())
+
+        for row in rows:
+            await send_master_card(
+                bot,
+                chat_id,
+                row,
+                title="👷 Картка майстра",
+                reply_markup=admin_master_card_inline(row["id"], row["status"]),
+            )
+
+        has_prev = page > 0
+        has_next = offset + PAGE_SIZE < total
+        nav = pagination_inline("admin_masters", page, has_prev, has_next)
+        if nav:
+            await bot.send_message(chat_id, "Навігація:", reply_markup=nav)
+
+    async def _show_admin_orders(chat_id: int, page: int, bot, status_filter=None):
+        offset = page * PAGE_SIZE
+        rows, total = await list_admin_orders(PAGE_SIZE, offset, status_filter)
+
+        if not rows:
+            await bot.send_message(chat_id, "Заявок не знайдено.", reply_markup=admin_menu_kb())
+            return
+
+        title = "📦 <b>Заявки</b>"
+        if status_filter:
+            title += f"\nФільтр: <b>{status_label(status_filter)}</b>"
+        await bot.send_message(chat_id, title, reply_markup=admin_menu_kb())
+
+        for row in rows:
+            await send_order_card(
+                bot,
+                chat_id,
+                row,
+                title="📄 Заявка",
+                reply_markup=admin_order_actions_inline(row["id"], row["status"]),
+            )
+
+        has_prev = page > 0
+        has_next = offset + PAGE_SIZE < total
+        prefix = f"admin_orders_{status_filter}" if status_filter else "admin_orders_all"
+        nav = pagination_inline(prefix, page, has_prev, has_next)
+        if nav:
+            await bot.send_message(chat_id, "Навігація:", reply_markup=nav)
+
+    async def _show_order_history(chat_id: int, order_id: int, bot):
+        order = await get_order_row(order_id)
+        if not order:
+            await bot.send_message(chat_id, "Заявку не знайдено.", reply_markup=admin_menu_kb())
+            return
+
+        events = await fetch(
+            """
+            SELECT *
+            FROM order_events
+            WHERE order_id=$1
+            ORDER BY created_at ASC, id ASC
+            """,
+            order_id,
+        )
+
+        offers_count = await fetchrow(
+            "SELECT COUNT(*) AS c FROM offers WHERE order_id=$1",
+            order_id,
+        )
+        complaints_count = await fetchrow(
+            "SELECT COUNT(*) AS c FROM complaints WHERE order_id=$1",
+            order_id,
+        )
+        chat_count = await fetchrow(
+            "SELECT COUNT(*) AS c FROM chat_messages WHERE order_id=$1",
+            order_id,
+        )
+
+        lines = [
+            f"🧾 <b>Історія заявки #{order_id}</b>",
+            "",
+            f"📌 Поточний статус: <b>{status_label(order['status'])}</b>",
+            f"📬 Пропозицій: <b>{int(offers_count['c'])}</b>",
+            f"💬 Повідомлень у чаті: <b>{int(chat_count['c'])}</b>",
+            f"⚠️ Скарг: <b>{int(complaints_count['c'])}</b>",
+            "",
+        ]
+
+        if events:
+            lines.append("<b>Події:</b>")
+            for ev in events:
+                lines.append(
+                    f"• {ev['event_type'] or 'event'} | "
+                    f"{ev['from_status'] or '—'} → {ev['to_status'] or '—'} | "
+                    f"actor={ev['actor_role'] or '—'}:{ev['actor_user_id'] or '—'}"
+                )
+        else:
+            lines.append("<b>Події:</b>")
+            lines.append("• Історія подій ще не накопичується окремо.")
+            lines.append("• Можна орієнтуватися по статусу, офферах, чатах і скаргах.")
+
+        await bot.send_message(chat_id, "\n".join(lines), reply_markup=admin_order_actions_inline(order_id, order["status"]))
+
+    async def _show_stale_orders(chat_id: int, bot):
+        now = now_ts()
+
+        new_without_offers = await fetch(
+            """
+            SELECT o.*
+            FROM orders o
+            WHERE o.status='new'
+              AND COALESCE(o.created_at, 0) <= $1
+              AND NOT EXISTS (
+                  SELECT 1 FROM offers f WHERE f.order_id=o.id
+              )
+            ORDER BY o.created_at ASC
+            LIMIT 20
+            """,
+            now - 30 * 60,
+        )
+
+        matched_stale = await fetch(
+            """
+            SELECT *
+            FROM orders
+            WHERE status='matched'
+              AND COALESCE(updated_at, created_at, 0) <= $1
+            ORDER BY updated_at ASC NULLS FIRST, created_at ASC NULLS FIRST
+            LIMIT 20
+            """,
+            now - 2 * 60 * 60,
+        )
+
+        in_progress_stale = await fetch(
+            """
+            SELECT *
+            FROM orders
+            WHERE status='in_progress'
+              AND COALESCE(updated_at, created_at, 0) <= $1
+            ORDER BY updated_at ASC NULLS FIRST, created_at ASC NULLS FIRST
+            LIMIT 20
+            """,
+            now - 24 * 60 * 60,
+        )
+
+        await bot.send_message(
+            chat_id,
+            "📦 <b>Завислі заявки</b>\n\n"
+            f"🆕 Без офферів 30+ хв: <b>{len(new_without_offers)}</b>\n"
+            f"🤝 Matched без руху 2+ год: <b>{len(matched_stale)}</b>\n"
+            f"🛠 In progress без руху 24+ год: <b>{len(in_progress_stale)}</b>",
+            reply_markup=admin_menu_kb(),
+        )
+
+        sections = [
+            ("🆕 <b>Без офферів 30+ хв</b>", new_without_offers),
+            ("🤝 <b>Matched без руху 2+ год</b>", matched_stale),
+            ("🛠 <b>In progress без руху 24+ год</b>", in_progress_stale),
+        ]
+
+        for title, rows in sections:
+            await bot.send_message(chat_id, title)
+            if not rows:
+                await bot.send_message(chat_id, "Немає.")
+                continue
+
+            for row in rows[:10]:
+                await send_order_card(
+                    bot,
+                    chat_id,
+                    row,
+                    title="📄 Заявка",
+                    reply_markup=admin_order_actions_inline(row["id"], row["status"]),
+                )
+
+    async def _show_master_by_user_id(chat_id: int, master_user_id: int, bot):
+        row = await fetchrow("SELECT * FROM masters WHERE user_id=$1", master_user_id)
+        if not row:
+            await bot.send_message(chat_id, "Майстра не знайдено.", reply_markup=admin_menu_kb())
+            return
+
+        stats_row = await fetchrow(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE selected_master_id=$1) AS total_selected,
+                COUNT(*) FILTER (WHERE selected_master_id=$1 AND status='done') AS done,
+                COUNT(*) FILTER (WHERE selected_master_id=$1 AND status IN ('cancelled','expired')) AS closed_bad,
+                COUNT(*) FILTER (WHERE selected_master_id=$1 AND status IN ('matched','in_progress')) AS active
+            FROM orders
+            """,
+            master_user_id,
+        )
+        complaints_row = await fetchrow(
+            "SELECT COUNT(*) AS c FROM complaints WHERE against_user_id=$1 AND against_role='master'",
+            master_user_id,
+        )
+
+        stats = {
+            "total_selected": int(stats_row["total_selected"] or 0),
+            "done": int(stats_row["done"] or 0),
+            "closed_bad": int(stats_row["closed_bad"] or 0),
+            "active": int(stats_row["active"] or 0),
+            "complaints": int(complaints_row["c"] or 0),
+        }
+
+        await send_master_card(
+            bot,
+            chat_id,
+            row,
+            title="👷 Картка майстра",
+            reply_markup=admin_master_card_inline(row["id"], row["status"]),
+        )
+        await bot.send_message(chat_id, _master_summary_text(row, stats), reply_markup=admin_menu_kb())
+
+    # =========================
+    # ADMIN ROOT
+    # =========================
+
+    @dp.message_handler(lambda m: m.text == "👑 Адмін", state="*")
+    async def admin_menu(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+
+        await state.finish()
+
+        stats = await admin_stats()
+        text = (
+            "👑 <b>Адмін-панель 2.0</b>\n\n"
+            f"📝 На модерації майстрів: <b>{stats['masters_pending']}</b>\n"
+            f"🆕 Нових заявок: <b>{stats['orders_new']}</b>\n"
+            f"📬 Заявок з пропозиціями: <b>{stats['orders_offered']}</b>\n"
+            f"🛠 В роботі: <b>{stats['orders_progress']}</b>\n\n"
+            "Оберіть розділ нижче 👇"
+        )
+        await message.answer(text, reply_markup=admin_menu_kb())
+
+    @dp.message_handler(commands=["stats"], state="*")
+    async def admin_statistics_command(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+
+        stats = await admin_stats()
+        text = (
+            "📊 <b>Статистика</b>\n\n"
+            f"👷 Всього майстрів: <b>{stats['masters_total']}</b>\n"
+            f"✅ Підтверджених: <b>{stats['masters_approved']}</b>\n"
+            f"⏳ На перевірці: <b>{stats['masters_pending']}</b>\n"
+            f"🚫 Заблокованих: <b>{stats['masters_blocked']}</b>\n\n"
+            f"📦 Всього заявок: <b>{stats['orders_total']}</b>\n"
+            f"🆕 Нові: <b>{stats['orders_new']}</b>\n"
+            f"📬 Є пропозиції: <b>{stats['orders_offered']}</b>\n"
+            f"🤝 Обрано майстра: <b>{stats['orders_matched']}</b>\n"
+            f"🛠 В роботі: <b>{stats['orders_progress']}</b>\n"
+            f"✅ Завершені: <b>{stats['orders_done']}</b>\n"
+            f"❌ Скасовані: <b>{stats['orders_cancelled']}</b>\n"
+            f"⌛ Прострочені: <b>{stats['orders_expired']}</b>"
+        )
+        await message.answer(text, reply_markup=admin_menu_kb())
+
+    @dp.message_handler(lambda m: m.text == "📊 Статистика", state="*")
+    async def admin_statistics(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await admin_statistics_command(message, state)
+
+    # =========================
+    # MASTERS
+    # =========================
+
+    @dp.message_handler(lambda m: m.text == "📝 Модерація майстрів", state="*")
+    async def pending_masters(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await _show_pending_masters(message.chat.id, 0, dp.bot)
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("pending_masters_"), state="*")
+    async def pending_masters_page(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            await call.answer()
+            return
+
+        page = int(call.data.split("_")[-1])
+        await _show_pending_masters(call.message.chat.id, page, dp.bot)
+        await call.answer()
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_approve_master_"), state="*")
     async def admin_approve_master(call: types.CallbackQuery, state: FSMContext):
@@ -198,31 +552,6 @@ def register(dp):
         page = int(call.data.split("_")[-1])
         await _show_admin_masters(call.message.chat.id, page, dp.bot)
         await call.answer()
-
-    async def _show_admin_masters(chat_id: int, page: int, bot):
-        offset = page * PAGE_SIZE
-        rows, total = await list_admin_masters(PAGE_SIZE, offset)
-
-        if not rows:
-            await bot.send_message(chat_id, "Майстрів не знайдено.", reply_markup=admin_menu_kb())
-            return
-
-        await bot.send_message(chat_id, "👷 <b>Майстри</b>", reply_markup=admin_menu_kb())
-
-        for row in rows:
-            await send_master_card(
-                bot,
-                chat_id,
-                row,
-                title="👷 Картка майстра",
-                reply_markup=admin_master_card_inline(row["id"], row["status"]),
-            )
-
-        has_prev = page > 0
-        has_next = offset + PAGE_SIZE < total
-        nav = pagination_inline("admin_masters", page, has_prev, has_next)
-        if nav:
-            await bot.send_message(chat_id, "Навігація:", reply_markup=nav)
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_block_master_"), state="*")
     async def admin_block_master(call: types.CallbackQuery, state: FSMContext):
@@ -299,6 +628,19 @@ def register(dp):
         await call.message.answer("🗑 Майстра видалено.")
         await call.answer("Готово")
 
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_open_master_by_user_"), state="*")
+    async def admin_open_master_by_user(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            await call.answer()
+            return
+        master_user_id = int(call.data.split("_")[-1])
+        await _show_master_by_user_id(call.message.chat.id, master_user_id, dp.bot)
+        await call.answer()
+
+    # =========================
+    # ORDERS
+    # =========================
+
     @dp.message_handler(lambda m: m.text == "📦 Заявки", state="*")
     async def admin_orders(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
@@ -330,36 +672,6 @@ def register(dp):
         await _show_admin_orders(call.message.chat.id, page, dp.bot, status_filter)
         await call.answer()
 
-    async def _show_admin_orders(chat_id: int, page: int, bot, status_filter=None):
-        offset = page * PAGE_SIZE
-        rows, total = await list_admin_orders(PAGE_SIZE, offset, status_filter)
-
-        if not rows:
-            await bot.send_message(chat_id, "Заявок не знайдено.", reply_markup=admin_menu_kb())
-            return
-
-        title = "📦 <b>Заявки</b>"
-        if status_filter:
-            title += f"\nФільтр: <b>{status_label(status_filter)}</b>"
-        await bot.send_message(chat_id, title, reply_markup=admin_menu_kb())
-
-        for row in rows:
-            master_name = await get_master_name(row["selected_master_id"])
-            await send_order_card(
-                bot,
-                chat_id,
-                row,
-                title="📄 Заявка",
-                reply_markup=admin_order_actions_inline(row["id"], row["status"]),
-            )
-
-        has_prev = page > 0
-        has_next = offset + PAGE_SIZE < total
-        prefix = f"admin_orders_{status_filter}" if status_filter else "admin_orders_all"
-        nav = pagination_inline(prefix, page, has_prev, has_next)
-        if nav:
-            await bot.send_message(chat_id, "Навігація:", reply_markup=nav)
-
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_order_detail_"), state="*")
     async def admin_order_detail(call: types.CallbackQuery, state: FSMContext):
         if not is_admin(call.from_user.id):
@@ -374,6 +686,15 @@ def register(dp):
 
         offers = await list_order_offers(order_id)
         await send_admin_order_detail(dp.bot, call.message.chat.id, order, offers)
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_order_history_"), state="*")
+    async def admin_order_history(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            await call.answer()
+            return
+        order_id = int(call.data.split("_")[-1])
+        await _show_order_history(call.message.chat.id, order_id, dp.bot)
         await call.answer()
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_expire_order_"), state="*")
@@ -429,6 +750,138 @@ def register(dp):
         await call.message.answer("🔄 Заявку повернуто в статус 'нова'.")
         await call.answer("Готово")
 
+    # =========================
+    # SEARCH
+    # =========================
+
+    @dp.message_handler(lambda m: m.text == "🔎 Пошук заявки", state="*")
+    async def search_order_start(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await state.finish()
+        await AdminSearchState.order_id.set()
+        await message.answer(
+            "🔎 <b>Пошук заявки</b>\n\nВведіть ID заявки числом.",
+            reply_markup=admin_menu_kb(),
+        )
+
+    @dp.message_handler(state=AdminSearchState.order_id, content_types=types.ContentTypes.TEXT)
+    async def search_order_finish(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish()
+            return
+
+        text = (message.text or "").strip()
+        if not text.isdigit():
+            await message.answer("Введіть коректний ID заявки числом.")
+            return
+
+        order_id = int(text)
+        order = await get_order_row(order_id)
+        if not order:
+            await state.finish()
+            await message.answer("Заявку не знайдено.", reply_markup=admin_menu_kb())
+            return
+
+        offers = await list_order_offers(order_id)
+        await send_admin_order_detail(dp.bot, message.chat.id, order, offers)
+        await _show_order_history(message.chat.id, order_id, dp.bot)
+        await state.finish()
+
+    @dp.message_handler(lambda m: m.text == "🔎 Пошук користувача", state="*")
+    async def search_user_start(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await state.finish()
+        await AdminSearchState.user_id.set()
+        await message.answer(
+            "🔎 <b>Пошук користувача</b>\n\nВведіть user_id клієнта.",
+            reply_markup=admin_menu_kb(),
+        )
+
+    @dp.message_handler(state=AdminSearchState.user_id, content_types=types.ContentTypes.TEXT)
+    async def search_user_finish(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish()
+            return
+
+        text = (message.text or "").strip()
+        if not text.isdigit():
+            await message.answer("Введіть коректний user_id числом.")
+            return
+
+        user_id = int(text)
+        rows = await fetch(
+            """
+            SELECT *
+            FROM orders
+            WHERE user_id=$1
+            ORDER BY created_at DESC, id DESC
+            LIMIT 20
+            """,
+            user_id,
+        )
+
+        await state.finish()
+
+        if not rows:
+            await message.answer("Заявок цього користувача не знайдено.", reply_markup=admin_menu_kb())
+            return
+
+        await message.answer(
+            f"👤 <b>Користувач {user_id}</b>\nЗнайдено заявок: <b>{len(rows)}</b>",
+            reply_markup=admin_menu_kb(),
+        )
+
+        for row in rows:
+            await send_order_card(
+                dp.bot,
+                message.chat.id,
+                row,
+                title="📄 Заявка користувача",
+                reply_markup=admin_order_actions_inline(row["id"], row["status"]),
+            )
+
+    @dp.message_handler(lambda m: m.text == "🔎 Пошук майстра", state="*")
+    async def search_master_start(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await state.finish()
+        await AdminSearchState.master_user_id.set()
+        await message.answer(
+            "🔎 <b>Пошук майстра</b>\n\nВведіть user_id майстра.",
+            reply_markup=admin_menu_kb(),
+        )
+
+    @dp.message_handler(state=AdminSearchState.master_user_id, content_types=types.ContentTypes.TEXT)
+    async def search_master_finish(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            await state.finish()
+            return
+
+        text = (message.text or "").strip()
+        if not text.isdigit():
+            await message.answer("Введіть коректний user_id числом.")
+            return
+
+        master_user_id = int(text)
+        await state.finish()
+        await _show_master_by_user_id(message.chat.id, master_user_id, dp.bot)
+
+    # =========================
+    # STALE ORDERS
+    # =========================
+
+    @dp.message_handler(lambda m: m.text == "📦 Завислі заявки", state="*")
+    async def stale_orders(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await _show_stale_orders(message.chat.id, dp.bot)
+
+    # =========================
+    # COMPLAINTS
+    # =========================
+
     @dp.message_handler(lambda m: m.text == "⚠️ Скарги", state="*")
     async def admin_complaints(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
@@ -464,7 +917,22 @@ def register(dp):
                 f"(<code>{row['against_user_id']}</code>)\n\n"
                 f"💬 <b>Текст:</b>\n{row['text']}"
             )
-            await message.answer(text)
+            await message.answer(
+                text,
+                reply_markup=admin_complaint_actions_inline(
+                    row["id"], row["order_id"], row["against_user_id"]
+                ),
+            )
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_delete_complaint_"), state="*")
+    async def admin_delete_complaint(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            await call.answer()
+            return
+        complaint_id = int(call.data.split("_")[-1])
+        await execute("DELETE FROM complaints WHERE id=$1", complaint_id)
+        await call.message.answer("🗑 Скаргу видалено.")
+        await call.answer("Готово")
 
     # =========================
     # SUPPORT REPLY
@@ -479,7 +947,7 @@ def register(dp):
         user_id = int(call.data.split("_")[-1])
         await state.finish()
         await state.update_data(support_target_user_id=user_id)
-        await SupportReply.text.set()
+        await AdminSearchState.support_reply.set()
 
         await call.message.answer(
             f"↩️ <b>Відповідь користувачу</b>\n\n"
@@ -489,7 +957,7 @@ def register(dp):
         )
         await call.answer()
 
-    @dp.message_handler(state=SupportReply.text, content_types=types.ContentTypes.TEXT)
+    @dp.message_handler(state=AdminSearchState.support_reply, content_types=types.ContentTypes.TEXT)
     async def support_reply_send(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             await state.finish()
