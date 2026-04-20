@@ -36,6 +36,9 @@ from ui_texts import (
     choose_category_text,
     client_actions_text,
     order_created_text,
+    tip_after_category,
+    tip_before_submit,
+    tip_choose_master,
 )
 from utils import is_admin, normalize_text, now_ts
 
@@ -44,7 +47,6 @@ logger = logging.getLogger(__name__)
 
 BACK_BUTTONS = {"⬅️ Назад", "Назад", "🔙 Назад"}
 SKIP_WORDS = {"пропустити", "skip", "-"}
-
 CHANGE_CATEGORY_BUTTONS = {
     "🔄 Змінити спеціальність",
     "🔧 Змінити спеціальність",
@@ -165,6 +167,7 @@ def register(dp):
             client_actions_text(category),
             reply_markup=client_actions_kb(),
         )
+        await message.answer(tip_after_category())
 
     @dp.message_handler(lambda m: m.text == "📨 Створити заявку", state="*")
     async def create_order_start(message: types.Message, state: FSMContext):
@@ -267,6 +270,7 @@ def register(dp):
             ask_media_text(),
             reply_markup=back_menu_kb(),
         )
+        await message.answer(tip_before_submit())
 
     @dp.message_handler(state=ClientCreateOrder.phone, content_types=types.ContentTypes.TEXT)
     async def client_order_phone_text(message: types.Message, state: FSMContext):
@@ -304,6 +308,7 @@ def register(dp):
             ask_media_text(),
             reply_markup=back_menu_kb(),
         )
+        await message.answer(tip_before_submit())
 
     @dp.message_handler(content_types=types.ContentTypes.ANY, state=ClientCreateOrder.media)
     async def client_order_media(message: types.Message, state: FSMContext):
@@ -432,12 +437,18 @@ def register(dp):
             f"📬 <b>Пропозиції по заявці #{order_id}</b>\n\n"
             "Оберіть майстра, який підходить найкраще 👇"
         )
+        await call.message.answer(tip_choose_master())
 
         for offer in offers:
+            rating = float(offer["rating"] or 0)
+            reviews = int(offer["reviews_count"] or 0)
+            online = "🟢 Онлайн" if (offer.get("availability") == "online") else "⚪ Офлайн"
+
             text = (
                 f"💼 <b>Пропозиція</b>\n\n"
                 f"👤 Майстер: {offer['name']}\n"
-                f"⭐ {float(offer['rating']):.2f} | відгуків: {offer['reviews_count']}\n"
+                f"{online}\n"
+                f"⭐ {rating:.2f} | відгуків: {reviews}\n"
                 f"💰 Ціна: {offer['price']}\n"
                 f"⏱ Коли зможе: {offer['eta']}\n"
                 f"📝 Коментар: {offer['comment']}"
