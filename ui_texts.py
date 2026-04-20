@@ -1,9 +1,6 @@
-from constants import (
-    category_label,
-    master_availability_label,
-    master_status_label,
-    status_label,
-)
+from config import settings
+from constants import category_label, master_status_label, status_label
+from utils import now_ts
 
 
 def _rating_text(value) -> str:
@@ -11,6 +8,36 @@ def _rating_text(value) -> str:
         return f"{float(value or 0):.2f}"
     except (TypeError, ValueError):
         return "0.00"
+
+
+def _master_presence_text(master_row) -> str:
+    """
+    Динамічний онлайн-статус за last_seen.
+    Не довіряємо лише полю availability, а рахуємо по часу.
+    """
+    try:
+        last_seen = int(master_row.get("last_seen") or 0)
+    except Exception:
+        last_seen = 0
+
+    if last_seen <= 0:
+        return "⚫ офлайн"
+
+    diff = now_ts() - last_seen
+    timeout = int(settings.online_timeout or 300)
+
+    if diff <= timeout:
+        return "🟢 онлайн"
+
+    if diff <= 60 * 10:
+        return "🕒 був нещодавно"
+
+    if diff <= 60 * 60:
+        minutes = max(1, diff // 60)
+        return f"🕒 був {minutes} хв тому"
+
+    hours = max(1, diff // 3600)
+    return f"⚫ був {hours} год тому"
 
 
 def welcome_text() -> str:
@@ -95,8 +122,8 @@ def ask_media_text() -> str:
 
 
 def master_profile_text(master_row) -> str:
-    availability = master_availability_label(master_row["availability"])
     status_text = master_status_label(master_row["status"])
+    presence = _master_presence_text(master_row)
 
     return (
         "👷 <b>Профіль майстра</b>\n\n"
@@ -109,7 +136,7 @@ def master_profile_text(master_row) -> str:
         f"⭐ <b>Рейтинг:</b> {_rating_text(master_row['rating'])}\n"
         f"💬 <b>Відгуків:</b> {master_row['reviews_count']}\n"
         f"✅ <b>Статус профілю:</b> {status_text}\n"
-        f"🟢 <b>Доступність:</b> {availability}"
+        f"🟢 <b>Доступність:</b> {presence}"
     )
 
 
@@ -127,8 +154,8 @@ def order_card_text(order_row, title: str, master_name: str) -> str:
 
 
 def master_card_text(master_row, title: str) -> str:
-    availability = master_availability_label(master_row["availability"])
     status_text = master_status_label(master_row["status"])
+    presence = _master_presence_text(master_row)
 
     return (
         f"{title}\n\n"
@@ -141,14 +168,17 @@ def master_card_text(master_row, title: str) -> str:
         f"⭐ <b>Рейтинг:</b> {_rating_text(master_row['rating'])}\n"
         f"💬 <b>Відгуків:</b> {master_row['reviews_count']}\n"
         f"✅ <b>Статус:</b> {status_text}\n"
-        f"🟢 <b>Доступність:</b> {availability}"
+        f"🟢 <b>Доступність:</b> {presence}"
     )
 
 
 def offer_card_text(offer) -> str:
+    presence = _master_presence_text(offer)
+
     return (
         "💼 <b>Пропозиція майстра</b>\n\n"
         f"👷 <b>{offer['name']}</b>\n"
+        f"{presence}\n"
         f"⭐ Рейтинг: {_rating_text(offer['rating'])} ({offer['reviews_count']} відгуків)\n"
         f"💰 Ціна: <b>{offer['price']}</b>\n"
         f"⏱ Коли зможе: <b>{offer['eta']}</b>\n\n"
