@@ -26,7 +26,6 @@ from repositories import (
     get_chat_history,
     get_cooldown,
     get_order_row,
-    list_order_offers,
     master_active_orders_count,
     rate_order,
     refuse_order,
@@ -68,7 +67,9 @@ def register(dp):
                 masters.rating,
                 masters.reviews_count,
                 masters.phone,
-                masters.category
+                masters.category,
+                masters.availability,
+                masters.last_seen
             FROM offers
             JOIN masters ON masters.user_id = offers.master_user_id
             WHERE offers.id=$1
@@ -99,9 +100,9 @@ def register(dp):
         except Exception:
             return default
 
-    def _after_dialog_markup(role: str, order_id: int, status: str = "matched"):
+    def _after_dialog_markup(role: str, order_id: int):
         if role == "client":
-            return client_order_actions_inline(order_id, status)
+            return client_order_actions_inline(order_id, "matched")
         return selected_order_master_actions(order_id)
 
     def _after_dialog_text(role: str, order_id: int) -> str:
@@ -201,10 +202,6 @@ def register(dp):
             await message_or_call.answer()
         else:
             await message_or_call.answer(text, reply_markup=chat_reply_kb())
-
-    # =========================
-    # OFFERS FLOW
-    # =========================
 
     @dp.callback_query_handler(lambda c: c.data.startswith("offer_start_"), state="*")
     async def offer_start(call: types.CallbackQuery, state: FSMContext):
@@ -407,10 +404,6 @@ def register(dp):
 
         await call.answer("Пропозицію обрано")
 
-    # =========================
-    # FINISH / REFUSE
-    # =========================
-
     @dp.callback_query_handler(lambda c: c.data.startswith("finish_order_"), state="*")
     async def finish_order_handler(call: types.CallbackQuery, state: FSMContext):
         order_id = int(call.data.split("_")[-1])
@@ -492,10 +485,6 @@ def register(dp):
             logger.warning("Не вдалося повідомити клієнта про відмову за заявкою %s: %s", order_id, e)
 
         await call.answer("Відмову збережено")
-
-    # =========================
-    # COMPLAINTS
-    # =========================
 
     @dp.callback_query_handler(lambda c: c.data.startswith("complain_master_"), state="*")
     async def complain_master_start(call: types.CallbackQuery, state: FSMContext):
@@ -631,10 +620,6 @@ def register(dp):
             reply_markup=_after_dialog_markup(return_role, order_id),
         )
 
-    # =========================
-    # RATING FLOW
-    # =========================
-
     @dp.callback_query_handler(lambda c: c.data.startswith("rate_"), state="*")
     async def rate_choose_handler(call: types.CallbackQuery, state: FSMContext):
         try:
@@ -730,10 +715,6 @@ def register(dp):
             "Ваш відгук допоможе іншим клієнтам обирати майстра.",
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
-
-    # =========================
-    # DIALOG BY ORDER
-    # =========================
 
     @dp.callback_query_handler(lambda c: c.data.startswith("client_chat_"), state="*")
     async def client_dialog_start(call: types.CallbackQuery, state: FSMContext):
