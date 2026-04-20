@@ -483,7 +483,9 @@ async def list_order_offers(order_id: int):
             masters.rating,
             masters.reviews_count,
             masters.phone,
-            masters.category
+            masters.category,
+            masters.availability,
+            masters.last_seen
         FROM offers
         JOIN masters ON masters.user_id = offers.master_user_id
         WHERE offers.order_id=$1
