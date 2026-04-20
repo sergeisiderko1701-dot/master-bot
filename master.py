@@ -1,5 +1,6 @@
 from aiogram import types
 from aiogram.dispatcher import FSMContext
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 from config import settings
 from constants import VALID_CATEGORIES, category_label
@@ -46,6 +47,31 @@ BACK_BUTTONS = {"⬅️ Назад", "Назад", "🔙 Назад"}
 SKIP_WORDS = {"пропустити", "skip", "-"}
 
 
+def normalize_phone(value: str) -> str:
+    raw = (value or "").strip()
+    raw = raw.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if raw.startswith("8"):
+        raw = "+3" + raw
+    if raw.startswith("380"):
+        raw = "+" + raw
+    return raw
+
+
+def is_valid_phone(value: str) -> bool:
+    if not value:
+        return False
+    if not value.startswith("+380"):
+        return False
+    return len(value) == 13 and value[1:].isdigit()
+
+
+def request_contact_kb():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.add(KeyboardButton("📲 Поділитися номером", request_contact=True))
+    kb.add(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
+    return kb
+
+
 def _validate_profile_field(field: str, message: types.Message):
     if field == "photo":
         value = message.photo[-1].file_id if message.photo else None
@@ -68,10 +94,10 @@ def _validate_profile_field(field: str, message: types.Message):
         return True, value, None
 
     if field == "phone":
-        value = normalize_text(raw_text, 50)
-        if not value or len(value) < 8:
-            return False, None, "Введіть коректний номер телефону."
-        return True, value, None
+        phone = normalize_phone(raw_text)
+        if not is_valid_phone(phone):
+            return False, None, "Введіть коректний номер у форматі +380XXXXXXXXX."
+        return True, phone, None
 
     if field == "description":
         value = normalize_text(raw_text, 1000)
@@ -250,17 +276,56 @@ def register(dp):
         await MasterRegistration.phone.set()
         await message.answer(
             "📞 <b>Контактний телефон</b>\n\n"
+            "Можете:\n"
+            "• натиснути кнопку <b>📲 Поділитися номером</b>\n"
+            "• або написати номер вручну у форматі <b>+380XXXXXXXXX</b>\n\n"
             "Цей номер побачить тільки клієнт, який обере вас.",
+            reply_markup=request_contact_kb(),
+        )
+
+    @dp.message_handler(state=MasterRegistration.phone, content_types=types.ContentTypes.CONTACT)
+    async def reg_phone_contact(message: types.Message, state: FSMContext):
+        if not message.contact:
+            await message.answer(
+                "Не вдалося отримати контакт. Спробуйте ще раз.",
+                reply_markup=request_contact_kb(),
+            )
+            return
+
+        phone = normalize_phone(message.contact.phone_number)
+
+        if not is_valid_phone(phone):
+            await message.answer(
+                "Номер із контакту виглядає некоректно. Надішліть правильний номер або введіть вручну у форматі <b>+380XXXXXXXXX</b>.",
+                reply_markup=request_contact_kb(),
+            )
+            return
+
+        await state.update_data(phone=phone)
+        await MasterRegistration.photo.set()
+        await message.answer(
+            "📸 <b>Фото профілю</b>\n\n"
+            "Надішліть фото або напишіть <b>пропустити</b>.",
             reply_markup=back_menu_kb(),
         )
 
     @dp.message_handler(state=MasterRegistration.phone, content_types=types.ContentTypes.TEXT)
     async def reg_phone(message: types.Message, state: FSMContext):
-        phone = normalize_text(message.text, 50)
-        if not phone or len(phone) < 8:
+        text = (message.text or "").strip()
+
+        if text in BACK_BUTTONS:
+            await state.finish()
             await message.answer(
-                "Введіть коректний номер телефону.",
-                reply_markup=back_menu_kb(),
+                "Повернулись у головне меню.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
+
+        phone = normalize_phone(text)
+        if not is_valid_phone(phone):
+            await message.answer(
+                "Введіть коректний номер у форматі <b>+380XXXXXXXXX</b> або натисніть кнопку <b>📲 Поділитися номером</b>.",
+                reply_markup=request_contact_kb(),
             )
             return
 
@@ -355,13 +420,59 @@ def register(dp):
         await state.update_data(edit_field=field)
         await ProfileEdit.value.set()
 
-        prompt = (
-            "Надішліть нове значення:"
-            if field != "photo"
-            else "Надішліть нове фото або напишіть 'пропустити':"
-        )
-        await call.message.answer(prompt, reply_markup=back_menu_kb())
+        if field == "photo":
+            prompt = "Надішліть нове фото або напишіть 'пропустити':"
+            reply_markup = back_menu_kb()
+        elif field == "phone":
+            prompt = (
+                "📞 <b>Новий номер телефону</b>\n\n"
+                "Можете натиснути кнопку <b>📲 Поділитися номером</b> "
+                "або ввести вручну у форматі <b>+380XXXXXXXXX</b>."
+            )
+            reply_markup = request_contact_kb()
+        else:
+            prompt = "Надішліть нове значення:"
+            reply_markup = back_menu_kb()
+
+        await call.message.answer(prompt, reply_markup=reply_markup)
         await call.answer()
+
+    @dp.message_handler(state=ProfileEdit.value, content_types=types.ContentTypes.CONTACT)
+    async def edit_profile_save_contact(message: types.Message, state: FSMContext):
+        data = await state.get_data()
+        field = data.get("edit_field")
+
+        if field != "phone":
+            await message.answer(
+                "Тут очікується інший тип даних.",
+                reply_markup=back_menu_kb(),
+            )
+            return
+
+        if not message.contact:
+            await message.answer(
+                "Не вдалося отримати контакт. Спробуйте ще раз.",
+                reply_markup=request_contact_kb(),
+            )
+            return
+
+        phone = normalize_phone(message.contact.phone_number)
+
+        if not is_valid_phone(phone):
+            await message.answer(
+                "Номер із контакту виглядає некоректно. Надішліть правильний номер або введіть вручну у форматі <b>+380XXXXXXXXX</b>.",
+                reply_markup=request_contact_kb(),
+            )
+            return
+
+        await update_master_profile(
+            message.from_user.id,
+            PROFILE_FIELD_MAP[field],
+            phone,
+        )
+
+        await state.finish()
+        await message.answer("✅ Профіль оновлено.", reply_markup=master_menu_kb())
 
     @dp.message_handler(content_types=types.ContentTypes.ANY, state=ProfileEdit.value)
     async def edit_profile_save(message: types.Message, state: FSMContext):
@@ -370,9 +481,10 @@ def register(dp):
 
         is_valid, value, error_text = _validate_profile_field(field, message)
         if not is_valid:
+            reply_markup = request_contact_kb() if field == "phone" else back_menu_kb()
             await message.answer(
                 error_text,
-                reply_markup=back_menu_kb(),
+                reply_markup=reply_markup,
             )
             return
 
@@ -420,7 +532,6 @@ def register(dp):
             f"📦 <b>Нові заявки</b>\n\nКатегорія: {category_label(master['category'])}",
             reply_markup=master_menu_kb(),
         )
-        await message.answer(tip_master_offer())
 
         for row in rows[:20]:
             try:
@@ -460,7 +571,6 @@ def register(dp):
             "✅ <b>Ваші активні заявки</b>",
             reply_markup=master_menu_kb(),
         )
-        await message.answer(tip_master_selected())
 
         for row in rows[:20]:
             try:
