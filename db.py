@@ -55,7 +55,8 @@ async def init_db(database_url: str):
             created_at BIGINT,
             updated_at BIGINT,
             admin_no_offer_alert_sent_at BIGINT,
-            master_reminder_sent_at BIGINT
+            master_reminder_sent_at BIGINT,
+            client_finish_reminder_sent_at BIGINT
         );
         """)
 
@@ -92,6 +93,11 @@ async def init_db(database_url: str):
         await conn.execute("""
         ALTER TABLE orders
         ADD COLUMN IF NOT EXISTS master_reminder_sent_at BIGINT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS client_finish_reminder_sent_at BIGINT;
         """)
 
         # =========================
@@ -338,6 +344,11 @@ async def init_db(database_url: str):
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orders_master_reminder_sent_at
         ON orders(master_reminder_sent_at);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orders_client_finish_reminder_sent_at
+        ON orders(client_finish_reminder_sent_at);
         """)
 
         # =========================
