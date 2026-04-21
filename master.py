@@ -3,7 +3,12 @@ from aiogram.dispatcher import FSMContext
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 from config import settings
-from constants import VALID_CATEGORIES, category_label
+from constants import (
+    VALID_CATEGORIES,
+    category_labels,
+    normalize_categories_value,
+    parse_categories,
+)
 from keyboards import (
     back_menu_kb,
     edit_profile_inline_kb,
@@ -28,14 +33,13 @@ from states import MasterRegistration, ProfileEdit
 from ui_texts import (
     ask_district_text,
     master_profile_text,
-    tip_master_offer,
-    tip_master_selected,
 )
 from utils import is_admin, normalize_text
 
 
 PROFILE_FIELD_MAP = {
     "name": "name",
+    "category": "category",
     "district": "district",
     "phone": "phone",
     "description": "description",
@@ -117,6 +121,24 @@ def _validate_profile_field(field: str, message: types.Message):
     return True, value, None
 
 
+def _get_selected_categories(data: dict) -> list[str]:
+    return parse_categories(data.get("selected_categories"))
+
+
+async def _show_category_selector(message_or_call, selected_values, *, edit_mode: bool = False):
+    text = (
+        "🔧 <b>Оберіть одну або кілька спеціальностей</b>\n\n"
+        "Можна вибрати кілька варіантів.\n"
+        "Після вибору натисніть <b>✅ Готово</b>."
+    )
+    markup = master_categories_inline_kb(selected_values)
+
+    if isinstance(message_or_call, types.CallbackQuery):
+        await message_or_call.message.answer(text, reply_markup=markup)
+    else:
+        await message_or_call.answer(text, reply_markup=markup)
+
+
 def register(dp):
     async def show_master_profile(message: types.Message, master_row):
         text = master_profile_text(master_row)
@@ -168,7 +190,7 @@ def register(dp):
         await message.answer(
             "👷 <b>Реєстрація майстра</b>\n\n"
             "Після заповнення анкети адміністратор перевірить профіль.\n"
-            "Після підтвердження ви почнете отримувати заявки у своїй категорії.\n\n"
+            "Після підтвердження ви почнете отримувати заявки у своїх категоріях.\n\n"
             "Введіть ваше ім'я:",
             reply_markup=back_menu_kb(),
         )
@@ -186,6 +208,7 @@ def register(dp):
             MasterRegistration.phone.state,
             MasterRegistration.photo.state,
             ProfileEdit.value.state,
+            ProfileEdit.category.state,
         ):
             await state.finish()
             await message.answer(
@@ -204,27 +227,72 @@ def register(dp):
             )
             return
 
-        await state.update_data(name=name)
+        await state.update_data(name=name, selected_categories=[])
         await MasterRegistration.category.set()
-        await message.answer(
-            "🔧 <b>Оберіть спеціальність</b>\n\n"
-            "Саме в цій категорії ви будете отримувати нові заявки.",
-            reply_markup=back_menu_kb(),
-        )
-        await message.answer("Категорії:", reply_markup=master_categories_inline_kb())
+        await _show_category_selector(message, [])
 
-    @dp.callback_query_handler(lambda c: c.data.startswith("master_cat_"), state=MasterRegistration.category)
-    async def reg_category(call: types.CallbackQuery, state: FSMContext):
-        category_value = call.data.split("master_cat_", 1)[1].strip()
+    @dp.callback_query_handler(lambda c: c.data.startswith("master_cat_toggle_"), state=[MasterRegistration.category, ProfileEdit.category])
+    async def category_toggle(call: types.CallbackQuery, state: FSMContext):
+        category_value = call.data.split("master_cat_toggle_", 1)[1].strip()
 
         if category_value not in VALID_CATEGORIES:
             await call.answer("Некоректна категорія", show_alert=True)
             return
 
-        await state.update_data(category=category_value)
+        data = await state.get_data()
+        selected = _get_selected_categories(data)
+
+        if category_value in selected:
+            selected.remove(category_value)
+        else:
+            selected.append(category_value)
+
+        await state.update_data(selected_categories=selected)
+
+        await call.message.edit_reply_markup(
+            reply_markup=master_categories_inline_kb(selected)
+        )
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data == "master_cat_done", state=MasterRegistration.category)
+    async def reg_category_done(call: types.CallbackQuery, state: FSMContext):
+        data = await state.get_data()
+        selected = _get_selected_categories(data)
+
+        if not selected:
+            await call.answer("Оберіть хоча б одну спеціальність", show_alert=True)
+            return
+
+        await state.update_data(category=normalize_categories_value(selected))
         await MasterRegistration.district.set()
+        await call.message.answer(
+            f"✅ <b>Обрані спеціальності:</b> {category_labels(selected)}",
+            reply_markup=back_menu_kb(),
+        )
         await call.message.answer(ask_district_text(), reply_markup=back_menu_kb())
         await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data == "master_cat_done", state=ProfileEdit.category)
+    async def edit_category_done(call: types.CallbackQuery, state: FSMContext):
+        data = await state.get_data()
+        selected = _get_selected_categories(data)
+
+        if not selected:
+            await call.answer("Оберіть хоча б одну спеціальність", show_alert=True)
+            return
+
+        await update_master_profile(
+            call.from_user.id,
+            PROFILE_FIELD_MAP["category"],
+            selected,
+        )
+
+        await state.finish()
+        await call.message.answer(
+            f"✅ <b>Спеціальності оновлено:</b> {category_labels(selected)}",
+            reply_markup=master_menu_kb(),
+        )
+        await call.answer("Збережено")
 
     @dp.message_handler(state=MasterRegistration.district, content_types=types.ContentTypes.TEXT)
     async def reg_district(message: types.Message, state: FSMContext):
@@ -352,6 +420,7 @@ def register(dp):
         data = await state.get_data()
         data["user_id"] = message.from_user.id
         data["photo"] = photo
+        data["category"] = normalize_categories_value(data.get("category") or data.get("selected_categories"))
 
         await create_or_update_master(data)
 
@@ -374,7 +443,7 @@ def register(dp):
         await message.answer(
             "⏳ <b>Анкету надіслано</b>\n\n"
             "Після перевірки адміністратор активує ваш профіль.\n"
-            "Після цього ви почнете отримувати заявки у своїй категорії.",
+            "Після цього ви почнете отримувати заявки у своїх категоріях.",
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
 
@@ -414,6 +483,14 @@ def register(dp):
 
         field = call.data.replace("edit_", "", 1)
         if field not in PROFILE_FIELD_MAP:
+            await call.answer()
+            return
+
+        if field == "category":
+            selected = parse_categories(master["category"])
+            await state.update_data(edit_field=field, selected_categories=selected)
+            await ProfileEdit.category.set()
+            await _show_category_selector(call, selected, edit_mode=True)
             await call.answer()
             return
 
@@ -518,18 +595,18 @@ def register(dp):
         if not rows:
             await message.answer(
                 f"📭 <b>Нових заявок поки немає</b>\n\n"
-                f"Категорія: {category_label(master['category'])}\n\n"
+                f"Категорії: {category_labels(master['category'])}\n\n"
                 "Ми покажемо вам нові заявки, щойно вони з’являться.\n\n"
                 "ℹ️ Щоб отримувати заявки:\n"
                 "• профіль має бути підтверджений\n"
-                "• категорія має збігатися із заявкою\n"
+                "• хоча б одна категорія має збігатися із заявкою\n"
                 "• бажано відкрити бот через /start",
                 reply_markup=master_menu_kb(),
             )
             return
 
         await message.answer(
-            f"📦 <b>Нові заявки</b>\n\nКатегорія: {category_label(master['category'])}",
+            f"📦 <b>Нові заявки</b>\n\nКатегорії: {category_labels(master['category'])}",
             reply_markup=master_menu_kb(),
         )
 
