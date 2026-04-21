@@ -19,10 +19,9 @@ from repositories import (
     cancel_order,
     client_active_orders_count,
     create_order,
-    fetch,
-    fetchrow,
     get_cooldown,
     get_order_row,
+    list_approved_masters_for_category,
     list_client_orders,
     list_order_offers,
     set_cooldown,
@@ -370,15 +369,7 @@ def register(dp):
         )
 
         order_row = await get_order_row(order_id)
-
-        masters = await fetch(
-            """
-            SELECT user_id, category, status
-            FROM masters
-            WHERE status='approved' AND category=$1
-            """,
-            data["client_category"],
-        )
+        masters = await list_approved_masters_for_category(data["client_category"])
 
         logger.info("ORDER ID=%s CATEGORY=%s", order_id, data["client_category"])
         logger.info("FILTERED MASTERS FOR ORDER=%s", len(masters))
