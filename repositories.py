@@ -1,5 +1,6 @@
 from typing import Optional
 
+from constants import normalize_categories_value, parse_categories
 from db import get_pool
 from utils import now_ts
 
@@ -93,6 +94,7 @@ async def approved_master_row(user_id: int):
 
 async def create_or_update_master(data: dict):
     ts = now_ts()
+    category_value = normalize_categories_value(data.get("category"))
     pool = get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
@@ -116,7 +118,7 @@ async def create_or_update_master(data: dict):
             """,
             data["user_id"],
             data.get("name"),
-            data.get("category"),
+            category_value,
             data.get("district"),
             data.get("phone"),
             data.get("description"),
@@ -127,9 +129,12 @@ async def create_or_update_master(data: dict):
 
 
 async def update_master_profile(user_id: int, field_name: str, value):
-    allowed = {"name", "district", "phone", "description", "experience", "photo"}
+    allowed = {"name", "category", "district", "phone", "description", "experience", "photo"}
     if field_name not in allowed:
         raise ValueError(f"Unsupported field: {field_name}")
+
+    if field_name == "category":
+        value = normalize_categories_value(value)
 
     query = f"UPDATE masters SET {field_name}=$1 WHERE user_id=$2"
     await execute(query, value, user_id)
@@ -162,18 +167,34 @@ async def master_active_orders_count(master_user_id: int) -> int:
     return int(value or 0)
 
 
-async def list_new_orders_for_master(category: str):
+async def list_new_orders_for_master(category_value):
+    categories = parse_categories(category_value)
+    if not categories:
+        return []
+
     return await fetch(
         """
         SELECT *
         FROM orders
-        WHERE category=$1
+        WHERE category = ANY($1::text[])
           AND status = ANY($2::text[])
         ORDER BY created_at DESC
         LIMIT 50
         """,
-        category,
+        categories,
         ["new", "offered"],
+    )
+
+
+async def list_approved_masters_for_category(category: str):
+    return await fetch(
+        """
+        SELECT user_id, category, status
+        FROM masters
+        WHERE status='approved'
+          AND $1 = ANY(string_to_array(category, ','))
+        """,
+        category,
     )
 
 
