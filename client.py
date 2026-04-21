@@ -27,6 +27,7 @@ from repositories import (
     list_order_offers,
     set_cooldown,
 )
+from security import allow_callback_action, allow_message_action
 from services import notify_admin_about_order, notify_masters_about_order, send_order_card
 from states import ClientCreateOrder
 from ui_texts import (
@@ -171,6 +172,16 @@ def register(dp):
 
     @dp.message_handler(lambda m: m.text == "📨 Створити заявку", state="*")
     async def create_order_start(message: types.Message, state: FSMContext):
+        allowed = await allow_message_action(
+            message,
+            action_key="client_create_order_click",
+            limit=5,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         data = await state.get_data()
         category = data.get("client_category")
 
@@ -312,6 +323,16 @@ def register(dp):
 
     @dp.message_handler(content_types=types.ContentTypes.ANY, state=ClientCreateOrder.media)
     async def client_order_media(message: types.Message, state: FSMContext):
+        allowed = await allow_message_action(
+            message,
+            action_key="client_finish_order_form",
+            limit=8,
+            window_seconds=120,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         data = await state.get_data()
         media_type = None
         media_file_id = None
@@ -410,6 +431,16 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("client_offers_"), state="*")
     async def client_offers(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="client_open_offers",
+            limit=15,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         order_id = int(call.data.split("_")[-1])
 
         order = await fetchrow(
@@ -462,7 +493,23 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("client_cancel_"), state="*")
     async def client_cancel_order(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="client_cancel_order",
+            limit=10,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         order_id = int(call.data.split("_")[-1])
+
+        logger.info(
+            "CLIENT CANCEL CLICK user_id=%s order_id=%s",
+            call.from_user.id,
+            order_id,
+        )
 
         order = await fetchrow(
             """
@@ -470,18 +517,38 @@ def register(dp):
             FROM orders
             WHERE id=$1
               AND user_id=$2
-              AND status = ANY($3::text[])
             """,
             order_id,
             call.from_user.id,
-            ["new", "offered", "matched"],
         )
 
         if not order:
-            await call.answer("Цю заявку вже не можна скасувати.", show_alert=True)
+            await call.answer("Заявку не знайдено.", show_alert=True)
             return
 
-        await cancel_order(order_id)
+        if order["status"] not in {"new", "offered", "matched"}:
+            await call.answer(
+                "Заявку вже не можна скасувати.",
+                show_alert=True,
+            )
+            return
+
+        try:
+            await cancel_order(order_id)
+            logger.info(
+                "CLIENT CANCEL SUCCESS user_id=%s order_id=%s",
+                call.from_user.id,
+                order_id,
+            )
+        except Exception as e:
+            logger.exception(
+                "CLIENT CANCEL FAILED user_id=%s order_id=%s error=%s",
+                call.from_user.id,
+                order_id,
+                e,
+            )
+            await call.answer("Не вдалося скасувати заявку.", show_alert=True)
+            return
 
         await call.message.answer(
             f"❌ <b>Заявку #{order_id} скасовано</b>",
