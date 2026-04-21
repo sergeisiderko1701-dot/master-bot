@@ -151,6 +151,13 @@ def selected_order_master_actions(order_id: int):
     return kb
 
 
+def finish_reminder_inline(order_id: int):
+    kb = _inline_kb(row_width=1)
+    kb.add(InlineKeyboardButton("✅ Так, завершено", callback_data=f"client_finish_yes_{order_id}"))
+    kb.add(InlineKeyboardButton("⏳ Ще ні", callback_data=f"client_finish_no_{order_id}"))
+    return kb
+
+
 def admin_master_card_inline(master_id: int, status: str):
     kb = _inline_kb(row_width=1)
 
