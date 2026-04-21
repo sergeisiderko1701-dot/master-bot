@@ -27,6 +27,9 @@ def register(dp):
 
     @dp.message_handler(commands=["diag"], state="*")
     async def diag_handler(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+
         await message.answer(
             f"hostname={socket.gethostname()}\n"
             f"pid={os.getpid()}"
