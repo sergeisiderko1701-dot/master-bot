@@ -271,7 +271,7 @@ async def init_db(database_url: str):
         """)
 
         # =========================
-        # INDEXES: MASTERS
+        # INDEXES
         # =========================
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_masters_user_id
@@ -293,9 +293,6 @@ async def init_db(database_url: str):
         ON masters(status, category);
         """)
 
-        # =========================
-        # INDEXES: ORDERS
-        # =========================
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orders_user_id
         ON orders(user_id);
@@ -351,9 +348,6 @@ async def init_db(database_url: str):
         ON orders(client_finish_reminder_sent_at);
         """)
 
-        # =========================
-        # INDEXES: OFFERS
-        # =========================
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_offers_order_id
         ON offers(order_id);
@@ -379,9 +373,6 @@ async def init_db(database_url: str):
         ON offers(order_id, master_user_id, status);
         """)
 
-        # =========================
-        # INDEXES: CHATS
-        # =========================
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_chats_order_id
         ON chats(order_id);
@@ -402,9 +393,6 @@ async def init_db(database_url: str):
         ON chats(master_user_id);
         """)
 
-        # =========================
-        # INDEXES: CHAT_MESSAGES
-        # =========================
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id
         ON chat_messages(chat_id);
@@ -425,9 +413,6 @@ async def init_db(database_url: str):
         ON chat_messages(order_id, id DESC);
         """)
 
-        # =========================
-        # INDEXES: COMPLAINTS / SUPPORT
-        # =========================
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_complaints_order_id
         ON complaints(order_id);
@@ -448,9 +433,6 @@ async def init_db(database_url: str):
         ON support_messages(from_user_id);
         """)
 
-        # =========================
-        # INDEXES: ORDER_EVENTS / AUDIT / COOLDOWNS / SPAM
-        # =========================
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_order_events_order_id
         ON order_events(order_id);
@@ -480,6 +462,21 @@ async def init_db(database_url: str):
         CREATE INDEX IF NOT EXISTS idx_spam_logs_scope
         ON spam_logs(scope);
         """)
+
+
+async def reset_db_pool(database_url: str):
+    global _pool
+
+    old_pool = _pool
+    _pool = None
+
+    if old_pool is not None:
+        try:
+            await old_pool.close()
+        except Exception:
+            pass
+
+    await init_db(database_url)
 
 
 def get_pool():
