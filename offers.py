@@ -32,6 +32,7 @@ from repositories import (
     set_cooldown,
     touch_master_presence,
 )
+from security import allow_callback_action, allow_message_action
 from services import send_chat_history
 from states import ChatFlow, ComplaintWrite, OfferCreate, RatingFlow
 from ui_texts import (
@@ -211,6 +212,16 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("offer_start_"), state="*")
     async def offer_start(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="master_offer_start",
+            limit=12,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         order_id = int(call.data.split("_")[-1])
 
         master = await approved_master_row(call.from_user.id)
@@ -325,6 +336,16 @@ def register(dp):
 
     @dp.message_handler(state=OfferCreate.comment, content_types=types.ContentTypes.TEXT)
     async def offer_comment(message: types.Message, state: FSMContext):
+        allowed = await allow_message_action(
+            message,
+            action_key="master_offer_finish",
+            limit=10,
+            window_seconds=120,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         text = (message.text or "").strip()
 
         if text in BACK_BUTTONS:
@@ -396,6 +417,16 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("choose_offer_"), state="*")
     async def choose_offer_handler(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="client_choose_offer",
+            limit=10,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         offer_id = int(call.data.split("_")[-1])
 
         selected_offer = await choose_offer(offer_id, call.from_user.id)
@@ -413,6 +444,16 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("finish_order_"), state="*")
     async def finish_order_handler(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="master_finish_order",
+            limit=8,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         order_id = int(call.data.split("_")[-1])
 
         order = await fetchrow(
@@ -454,6 +495,16 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("refuse_order_"), state="*")
     async def refuse_order_handler(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="master_refuse_order",
+            limit=8,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         order_id = int(call.data.split("_")[-1])
 
         order = await fetchrow(
@@ -495,6 +546,16 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("complain_master_"), state="*")
     async def complain_master_start(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="complain_master_start",
+            limit=6,
+            window_seconds=60,
+            mute_seconds=600,
+        )
+        if not allowed:
+            return
+
         order_id = int(call.data.split("_")[-1])
 
         order = await fetchrow(
@@ -531,6 +592,16 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("complain_client_"), state="*")
     async def complain_client_start(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="complain_client_start",
+            limit=6,
+            window_seconds=60,
+            mute_seconds=600,
+        )
+        if not allowed:
+            return
+
         order_id = int(call.data.split("_")[-1])
 
         order = await fetchrow(
@@ -566,6 +637,16 @@ def register(dp):
 
     @dp.message_handler(state=ComplaintWrite.text, content_types=types.ContentTypes.TEXT)
     async def complaint_send(message: types.Message, state: FSMContext):
+        allowed = await allow_message_action(
+            message,
+            action_key="complaint_send",
+            limit=5,
+            window_seconds=300,
+            mute_seconds=900,
+        )
+        if not allowed:
+            return
+
         text = normalize_text(message.text, 1500)
         data = await state.get_data()
 
@@ -629,6 +710,16 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("rate_"), state="*")
     async def rate_choose_handler(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="client_rate_order",
+            limit=8,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         try:
             _, order_id_str, rating_str = call.data.split("_")
             order_id = int(order_id_str)
@@ -669,6 +760,16 @@ def register(dp):
 
     @dp.message_handler(state=RatingFlow.review, content_types=types.ContentTypes.TEXT)
     async def rate_review_handler(message: types.Message, state: FSMContext):
+        allowed = await allow_message_action(
+            message,
+            action_key="client_rate_review",
+            limit=6,
+            window_seconds=300,
+            mute_seconds=600,
+        )
+        if not allowed:
+            return
+
         data = await state.get_data()
         order_id = data.get("rate_order_id")
         rating_value = data.get("rate_value")
@@ -724,6 +825,16 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("client_chat_"), state="*")
     async def client_dialog_start(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="client_open_chat",
+            limit=15,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         order_id = int(call.data.split("_")[-1])
 
         order = await fetchrow(
@@ -760,6 +871,16 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("master_chat_open_"), state="*")
     async def master_dialog_start(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="master_open_chat",
+            limit=15,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         order_id = int(call.data.split("_")[-1])
 
         order = await fetchrow(
@@ -797,6 +918,16 @@ def register(dp):
 
     @dp.callback_query_handler(lambda c: c.data.startswith("chat_history_"), state="*")
     async def history(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="open_chat_history",
+            limit=15,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         order_id = int(call.data.split("_")[-1])
 
         chat = await get_chat_for_order(order_id)
@@ -814,6 +945,16 @@ def register(dp):
 
     @dp.message_handler(lambda m: m.text == "📜 Історія", state=ChatFlow.message)
     async def history_from_dialog(message: types.Message, state: FSMContext):
+        allowed = await allow_message_action(
+            message,
+            action_key="open_chat_history_message",
+            limit=10,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
         data = await state.get_data()
         msgs = await get_chat_history(data["order_id"], 30)
         await send_chat_history(dp.bot, message.chat.id, data["order_id"], msgs)
@@ -840,6 +981,16 @@ def register(dp):
 
     @dp.message_handler(content_types=types.ContentTypes.ANY, state=ChatFlow.message)
     async def relay_dialog_message(message: types.Message, state: FSMContext):
+        allowed = await allow_message_action(
+            message,
+            action_key="chat_send_message",
+            limit=12,
+            window_seconds=60,
+            mute_seconds=600,
+        )
+        if not allowed:
+            return
+
         data = await state.get_data()
         target_id = data["target_user_id"]
         role = data["chat_role"]
