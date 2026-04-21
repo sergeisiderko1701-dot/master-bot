@@ -18,9 +18,13 @@ async def _run_with_retry(method_name: str, query: str, *args):
         async with pool.acquire() as conn:
             method = getattr(conn, method_name)
             return await method(query, *args)
+
     except asyncpg.InvalidCachedStatementError:
-        # Після ALTER TABLE / зміни схеми asyncpg може тримати
-        # старий кешований план. Повторюємо запит ще раз.
+        # Після ALTER TABLE / зміни схеми asyncpg може тримати старі
+        # cached statement plans у вже відкритих конектах пулу.
+        # Примусово "старимо" всі поточні конекти пулу і повторюємо запит.
+        await pool.expire_connections()
+
         async with pool.acquire() as conn:
             method = getattr(conn, method_name)
             return await method(query, *args)
