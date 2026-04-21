@@ -6,11 +6,12 @@ from aiogram import types
 from aiogram.dispatcher import FSMContext
 
 from config import settings
-from keyboards import back_menu_kb, main_menu_kb, support_reply_inline
+from keyboards import back_menu_kb, main_menu_kb
 from repositories import add_support_message, approved_master_row, touch_master_presence
+from security import allow_message_action
 from states import SupportWrite
 from ui_texts import menu_text, support_intro, support_sent, welcome_text
-from utils import is_admin, normalize_text
+from utils import is_admin
 
 
 logger = logging.getLogger(__name__)
@@ -26,9 +27,6 @@ def register(dp):
 
     @dp.message_handler(commands=["diag"], state="*")
     async def diag_handler(message: types.Message, state: FSMContext):
-        if not is_admin(message.from_user.id):
-            return
-
         await message.answer(
             f"hostname={socket.gethostname()}\n"
             f"pid={os.getpid()}"
@@ -41,7 +39,7 @@ def register(dp):
 
         await message.answer(
             welcome_text(),
-            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id))
         )
 
     @dp.message_handler(lambda m: (m.text or "").strip() == "🏠 У меню", state="*")
@@ -51,68 +49,69 @@ def register(dp):
 
         await message.answer(
             menu_text(),
-            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id))
+        )
+
+    @dp.message_handler(lambda m: (m.text or "") in BACK_BUTTONS, state="*")
+    async def back_handler(message: types.Message, state: FSMContext):
+        await state.finish()
+        await update_master_presence_if_needed(message.from_user.id)
+
+        await message.answer(
+            menu_text(),
+            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id))
         )
 
     @dp.callback_query_handler(lambda c: c.data == "exit_chat", state="*")
     async def exit_chat(call: types.CallbackQuery, state: FSMContext):
-        data = await state.get_data()
-        role = data.get("chat_role")
-        order_id = data.get("order_id")
-
         await state.finish()
         await update_master_presence_if_needed(call.from_user.id)
 
-        if role and order_id:
-            from keyboards import client_order_actions_inline, selected_order_master_actions
-
-            reply_markup = (
-                client_order_actions_inline(order_id, "matched")
-                if role == "client"
-                else selected_order_master_actions(order_id)
-            )
-
-            await call.message.answer(
-                f"💬 <b>Режим написання по заявці #{order_id} закрито</b>",
-                reply_markup=reply_markup,
-            )
-        else:
-            await call.message.answer(
-                "💬 <b>Діалог закрито</b>\n\nПовертаю вас до меню.",
-                reply_markup=main_menu_kb(is_admin_user=is_admin(call.from_user.id)),
-            )
-
+        await call.message.answer(
+            "💬 <b>Діалог закрито</b>\n\nПовертаю вас до меню.",
+            reply_markup=main_menu_kb(is_admin_user=is_admin(call.from_user.id))
+        )
         await call.answer()
 
-    @dp.message_handler(lambda m: m.text == "🆘 Допомога", state="*")
+    @dp.message_handler(lambda m: m.text in {"🆘 Підтримка", "🆘 Допомога"}, state="*")
     async def support_start(message: types.Message, state: FSMContext):
+        allowed = await allow_message_action(
+            message,
+            action_key="support_start",
+            limit=6,
+            window_seconds=300,
+            mute_seconds=900,
+        )
+        if not allowed:
+            return
+
         await state.finish()
         await update_master_presence_if_needed(message.from_user.id)
 
         await SupportWrite.text.set()
         await message.answer(
             support_intro(),
-            reply_markup=back_menu_kb(),
-        )
-
-    @dp.message_handler(lambda m: (m.text or "").strip() in BACK_BUTTONS, state=SupportWrite.text)
-    async def support_back(message: types.Message, state: FSMContext):
-        await state.finish()
-        await update_master_presence_if_needed(message.from_user.id)
-
-        await message.answer(
-            menu_text(),
-            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            reply_markup=back_menu_kb()
         )
 
     @dp.message_handler(state=SupportWrite.text, content_types=types.ContentTypes.TEXT)
     async def support_send(message: types.Message, state: FSMContext):
-        text = normalize_text(message.text, 2000)
+        allowed = await allow_message_action(
+            message,
+            action_key="support_send",
+            limit=5,
+            window_seconds=600,
+            mute_seconds=1800,
+        )
+        if not allowed:
+            return
+
+        text = (message.text or "").strip()
 
         if not text or len(text) < 3:
             await message.answer(
                 "Напишіть повідомлення трохи детальніше.",
-                reply_markup=back_menu_kb(),
+                reply_markup=back_menu_kb()
             )
             return
 
@@ -130,6 +129,8 @@ def register(dp):
         try:
             await add_support_message(user.id, text)
 
+            from keyboards import support_reply_inline
+
             await message.bot.send_message(
                 settings.admin_id,
                 admin_text,
@@ -139,15 +140,13 @@ def register(dp):
             logger.warning("Не вдалося відправити повідомлення в підтримку адміну: %s", e)
             await message.answer(
                 "Не вдалося надіслати повідомлення адміністратору. Спробуйте пізніше.",
-                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id))
             )
             await state.finish()
             return
 
         await state.finish()
-        await update_master_presence_if_needed(message.from_user.id)
-
         await message.answer(
             support_sent(),
-            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id))
         )
