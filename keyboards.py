@@ -88,16 +88,22 @@ def admin_orders_filter_kb():
     return kb
 
 
-def master_categories_inline_kb():
+def master_categories_inline_kb(selected_values=None, done_callback: str = "master_cat_done"):
+    selected_values = set(selected_values or [])
     kb = _inline_kb(row_width=1)
+
     for label, value in CATEGORIES:
-        kb.add(InlineKeyboardButton(label, callback_data=f"master_cat_{value}"))
+        prefix = "✅ " if value in selected_values else ""
+        kb.add(InlineKeyboardButton(f"{prefix}{label}", callback_data=f"master_cat_toggle_{value}"))
+
+    kb.add(InlineKeyboardButton("✅ Готово", callback_data=done_callback))
     return kb
 
 
 def edit_profile_inline_kb():
     kb = _inline_kb(row_width=1)
     kb.add(InlineKeyboardButton("👤 Ім'я", callback_data="edit_name"))
+    kb.add(InlineKeyboardButton("🔧 Спеціальності", callback_data="edit_category"))
     kb.add(InlineKeyboardButton("📍 Район", callback_data="edit_district"))
     kb.add(InlineKeyboardButton("📞 Телефон", callback_data="edit_phone"))
     kb.add(InlineKeyboardButton("🧾 Опис", callback_data="edit_description"))
