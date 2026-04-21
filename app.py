@@ -20,6 +20,7 @@ import misc
 import offers
 from config import settings
 from db import init_db
+from monitoring import stale_orders_watcher
 
 
 logging.basicConfig(
@@ -31,10 +32,6 @@ logger = logging.getLogger(__name__)
 
 
 def make_lock_key(token: str) -> int:
-    """
-    Генерує стабільний advisory lock key лише з BOT_TOKEN.
-    Усі інстанси одного й того ж бота будуть боротися за один lock.
-    """
     digest = hashlib.sha256(token.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
@@ -138,6 +135,7 @@ async def main():
     lock_conn = None
     polling_task = None
     shutdown_wait_task = None
+    monitoring_task = None
     lock_key = None
     pg_backend_pid = None
 
@@ -227,9 +225,12 @@ async def main():
 
         polling_task = asyncio.create_task(dp.start_polling())
         shutdown_wait_task = asyncio.create_task(shutdown_event.wait())
+        monitoring_task = asyncio.create_task(
+            stale_orders_watcher(bot, shutdown_event)
+        )
 
         done, pending = await asyncio.wait(
-            {polling_task, shutdown_wait_task},
+            {polling_task, shutdown_wait_task, monitoring_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -239,18 +240,28 @@ async def main():
                 await task
 
         if shutdown_event.is_set():
-            logger.warning("Shutdown requested. Stopping polling task...")
+            logger.warning("Shutdown requested. Stopping tasks...")
 
             if polling_task and not polling_task.done():
                 polling_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await polling_task
 
-            logger.warning("Polling stopped.")
+            if monitoring_task and not monitoring_task.done():
+                monitoring_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await monitoring_task
+
+            logger.warning("Background tasks stopped.")
 
         else:
             if polling_task in done:
                 exc = polling_task.exception()
+                if exc:
+                    raise exc
+
+            if monitoring_task in done:
+                exc = monitoring_task.exception()
                 if exc:
                     raise exc
 
@@ -286,6 +297,11 @@ async def main():
             shutdown_wait_task.cancel()
             with suppress(asyncio.CancelledError):
                 await shutdown_wait_task
+
+        if monitoring_task and not monitoring_task.done():
+            monitoring_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await monitoring_task
 
         if polling_task and not polling_task.done():
             polling_task.cancel()
