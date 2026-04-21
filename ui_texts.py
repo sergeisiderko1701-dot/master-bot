@@ -1,5 +1,5 @@
 from config import settings
-from constants import category_label, master_status_label, status_label
+from constants import category_label, category_labels, master_status_label, status_label
 from utils import now_ts
 
 
@@ -11,9 +11,6 @@ def _rating_text(value) -> str:
 
 
 def _master_presence_text(master_row) -> str:
-    """
-    Динамічний онлайн-статус за last_seen.
-    """
     try:
         last_seen = int(master_row.get("last_seen") or 0)
     except Exception:
@@ -41,10 +38,6 @@ def _master_presence_text(master_row) -> str:
     hours = max(1, diff // 3600)
     return f"⚫ був {hours} год тому"
 
-
-# =========================
-# BASE TEXTS
-# =========================
 
 def welcome_text() -> str:
     return (
@@ -75,10 +68,6 @@ def support_sent() -> str:
         "Адміністратор відповість вам найближчим часом."
     )
 
-
-# =========================
-# CLIENT FLOW
-# =========================
 
 def order_created_text() -> str:
     return (
@@ -128,10 +117,6 @@ def ask_media_text() -> str:
         "Надішліть фото/відео проблеми або напишіть <b>пропустити</b>."
     )
 
-
-# =========================
-# CLIENT TIPS
-# =========================
 
 def tip_after_category() -> str:
     return (
@@ -183,10 +168,6 @@ def tip_no_response() -> str:
     )
 
 
-# =========================
-# MASTER TIPS
-# =========================
-
 def tip_master_offer() -> str:
     return (
         "💡 <b>Порада</b>\n\n"
@@ -209,10 +190,6 @@ def tip_master_selected() -> str:
     )
 
 
-# =========================
-# MASTER / ORDER CARDS
-# =========================
-
 def master_profile_text(master_row) -> str:
     status_text = master_status_label(master_row["status"])
     presence = _master_presence_text(master_row)
@@ -220,7 +197,7 @@ def master_profile_text(master_row) -> str:
     return (
         "👷 <b>Профіль майстра</b>\n\n"
         f"👤 <b>{master_row['name']}</b>\n"
-        f"🔧 {category_label(master_row['category'])}\n"
+        f"🔧 {category_labels(master_row['category'])}\n"
         f"📍 {master_row['district'] or '—'}\n"
         f"📞 {master_row['phone'] or '—'}\n\n"
         f"🧾 <b>Про себе</b>\n{master_row['description'] or '—'}\n\n"
@@ -239,7 +216,7 @@ def master_card_text(master_row, title: str = "👷 <b>Картка майстр
     return (
         f"{title}\n\n"
         f"👤 <b>{master_row['name']}</b>\n"
-        f"🔧 {category_label(master_row['category'])}\n"
+        f"🔧 {category_labels(master_row['category'])}\n"
         f"📍 {master_row['district'] or '—'}\n"
         f"📞 {master_row['phone'] or '—'}\n\n"
         f"🧾 <b>Опис</b>\n{master_row['description'] or '—'}\n\n"
@@ -263,10 +240,6 @@ def order_card_text(order_row, title: str, master_name: str) -> str:
         f"⭐ <b>Оцінка:</b> {order_row['rating'] if order_row['rating'] is not None else '—'}"
     )
 
-
-# =========================
-# OFFERS
-# =========================
 
 def offer_card_text(offer) -> str:
     presence = _master_presence_text(offer)
@@ -321,10 +294,6 @@ def master_selected_for_master_text(order_id: int) -> str:
     )
 
 
-# =========================
-# CHAT TEXTS
-# =========================
-
 def chat_open_text(order_id: int, is_client: bool) -> str:
     if is_client:
         return (
@@ -349,10 +318,6 @@ def chat_media_caption(order_id: int, role: str, caption: str, icon: str) -> str
     base = f"{icon} <b>Заявка #{order_id}</b>\n{prefix}"
     return f"{base}\n{caption}" if caption else base
 
-
-# =========================
-# RATING
-# =========================
 
 def rating_intro(order_id: int) -> str:
     return (
