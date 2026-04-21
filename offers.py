@@ -9,6 +9,7 @@ from keyboards import (
     chat_reply_kb,
     client_order_actions_inline,
     exit_chat_inline,
+    finish_reminder_inline,
     main_menu_kb,
     offer_select_inline,
     rating_inline,
@@ -543,6 +544,103 @@ def register(dp):
             logger.warning("Не вдалося повідомити клієнта про відмову по заявці %s: %s", order_id, e)
 
         await call.answer("Відмову збережено")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("client_finish_yes_"), state="*")
+    async def client_finish_yes_handler(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="client_finish_yes",
+            limit=8,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
+        order_id = int(call.data.split("_")[-1])
+
+        order = await fetchrow(
+            """
+            SELECT *
+            FROM orders
+            WHERE id=$1
+              AND user_id=$2
+              AND status='in_progress'
+            """,
+            order_id,
+            call.from_user.id,
+        )
+
+        if not order:
+            await call.answer("Цю заявку вже не можна завершити.", show_alert=True)
+            return
+
+        await finish_order(order_id)
+
+        await call.message.answer(
+            (
+                f"✅ <b>Заявку #{order_id} завершено</b>\n\n"
+                "Будь ласка, оцініть майстра від 1 до 5 ⭐"
+            ),
+            reply_markup=rating_inline(order_id),
+        )
+
+        if order["selected_master_id"]:
+            try:
+                await dp.bot.send_message(
+                    order["selected_master_id"],
+                    (
+                        f"✅ <b>Клієнт підтвердив завершення заявки #{order_id}</b>\n\n"
+                        "Дякуємо за виконану роботу."
+                    ),
+                )
+            except Exception as e:
+                logger.warning(
+                    "Не вдалося повідомити майстра про клієнтське завершення заявки %s: %s",
+                    order_id,
+                    e,
+                )
+
+        await call.answer("Завершено")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("client_finish_no_"), state="*")
+    async def client_finish_no_handler(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="client_finish_no",
+            limit=8,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
+        order_id = int(call.data.split("_")[-1])
+
+        order = await fetchrow(
+            """
+            SELECT *
+            FROM orders
+            WHERE id=$1
+              AND user_id=$2
+              AND status='in_progress'
+            """,
+            order_id,
+            call.from_user.id,
+        )
+
+        if not order:
+            await call.answer("Заявка вже неактуальна.", show_alert=True)
+            return
+
+        await call.message.answer(
+            (
+                f"⏳ <b>Заявка #{order_id} залишається активною</b>\n\n"
+                "Добре, нічого не змінюємо."
+            ),
+            reply_markup=client_order_actions_inline(order_id, "in_progress"),
+        )
+        await call.answer("Добре")
 
     @dp.callback_query_handler(lambda c: c.data.startswith("complain_master_"), state="*")
     async def complain_master_start(call: types.CallbackQuery, state: FSMContext):
