@@ -2,7 +2,6 @@
 # LIMITS
 # =========================
 # Залишаємо для сумісності, якщо десь у коді ще є імпорти з constants.
-# Основним джерелом runtime-значень надалі бажано зробити config.py.
 
 CLIENT_ORDER_COOLDOWN = 30
 MASTER_OFFER_COOLDOWN = 15
@@ -21,11 +20,21 @@ PAGE_SIZE = 5
 CATEGORY_PLUMBER = "plumber"
 CATEGORY_ELECTRICIAN = "electrician"
 CATEGORY_REPAIR = "repair"
+CATEGORY_WASHING = "washing"
+CATEGORY_AC = "ac"
+CATEGORY_FURNITURE = "furniture"
+CATEGORY_DOORS = "doors"
+CATEGORY_CLEANING = "cleaning"
 
 CATEGORIES = [
     ("🚰 Сантехнік", CATEGORY_PLUMBER),
     ("⚡ Електрик", CATEGORY_ELECTRICIAN),
     ("🛠 Ремонт", CATEGORY_REPAIR),
+    ("🧺 Пральні машини", CATEGORY_WASHING),
+    ("❄️ Кондиціонери", CATEGORY_AC),
+    ("🪑 Меблі", CATEGORY_FURNITURE),
+    ("🚪 Двері / замки", CATEGORY_DOORS),
+    ("🧹 Прибирання", CATEGORY_CLEANING),
 ]
 
 CATEGORY_LABEL_TO_VALUE = {label: value for label, value in CATEGORIES}
