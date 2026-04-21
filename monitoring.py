@@ -2,7 +2,11 @@ import asyncio
 import logging
 
 from config import settings
-from keyboards import admin_order_actions_inline, order_card_master_actions
+from keyboards import (
+    admin_order_actions_inline,
+    finish_reminder_inline,
+    order_card_master_actions,
+)
 from repositories import execute, fetch
 from services import send_order_card
 from utils import now_ts
@@ -10,16 +14,12 @@ from utils import now_ts
 
 logger = logging.getLogger(__name__)
 
-# Як часто перевіряти заявки
 STALE_ORDERS_CHECK_INTERVAL_SECONDS = 180
 
-# Через скільки секунд без оферів слати повторне нагадування майстрам
 MASTER_REMINDER_AFTER_SECONDS = 5 * 60
-
-# Через скільки секунд без оферів слати алерт адміну
 ADMIN_NO_OFFER_ALERT_AFTER_SECONDS = 30 * 60
+CLIENT_FINISH_REMINDER_AFTER_SECONDS = 24 * 60 * 60
 
-# Скільки заявок максимум обробляти за один цикл
 BATCH_LIMIT = 20
 
 
@@ -69,6 +69,24 @@ async def _get_orders_without_offers_for_admin_alert(limit: int):
     )
 
 
+async def _get_orders_for_client_finish_reminder(limit: int):
+    threshold_ts = now_ts() - CLIENT_FINISH_REMINDER_AFTER_SECONDS
+
+    return await fetch(
+        """
+        SELECT o.*
+        FROM orders o
+        WHERE o.status='in_progress'
+          AND COALESCE(o.updated_at, o.created_at, 0) <= $1
+          AND o.client_finish_reminder_sent_at IS NULL
+        ORDER BY COALESCE(o.updated_at, o.created_at) ASC
+        LIMIT $2
+        """,
+        threshold_ts,
+        limit,
+    )
+
+
 async def _get_approved_masters_for_category(category: str):
     return await fetch(
         """
@@ -101,6 +119,19 @@ async def _mark_admin_no_offer_alert_sent(order_id: int):
         SET admin_no_offer_alert_sent_at=$1
         WHERE id=$2
           AND admin_no_offer_alert_sent_at IS NULL
+        """,
+        now_ts(),
+        order_id,
+    )
+
+
+async def _mark_client_finish_reminder_sent(order_id: int):
+    await execute(
+        """
+        UPDATE orders
+        SET client_finish_reminder_sent_at=$1
+        WHERE id=$2
+          AND client_finish_reminder_sent_at IS NULL
         """,
         now_ts(),
         order_id,
@@ -208,6 +239,42 @@ async def notify_admin_about_stale_orders(bot):
             )
 
 
+async def notify_clients_about_finish_reminder(bot):
+    rows = await _get_orders_for_client_finish_reminder(BATCH_LIMIT)
+    if not rows:
+        return
+
+    for row in rows:
+        order_id = int(row["id"])
+        user_id = row["user_id"]
+
+        try:
+            await bot.send_message(
+                user_id,
+                (
+                    f"⏰ <b>Заявка #{order_id} все ще активна</b>\n\n"
+                    "Майстер уже виконав роботу?\n\n"
+                    "Якщо так — підтвердіть завершення і залиште оцінку."
+                ),
+                reply_markup=finish_reminder_inline(order_id),
+            )
+
+            await _mark_client_finish_reminder_sent(order_id)
+
+            logger.info(
+                "Client finish reminder sent for order_id=%s user_id=%s",
+                order_id,
+                user_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to send client finish reminder for order_id=%s user_id=%s: %s",
+                order_id,
+                user_id,
+                e,
+            )
+
+
 async def notify_masters_about_stale_orders(bot):
     rows = await _get_orders_for_master_reminder(BATCH_LIMIT)
     if not rows:
@@ -225,16 +292,18 @@ async def notify_masters_about_stale_orders(bot):
 
 async def stale_orders_watcher(bot, shutdown_event: asyncio.Event):
     logger.info(
-        "Stale orders watcher started: every %s sec, master reminder=%s sec, admin alert=%s sec",
+        "Stale orders watcher started: every %s sec, master reminder=%s sec, admin alert=%s sec, client finish reminder=%s sec",
         STALE_ORDERS_CHECK_INTERVAL_SECONDS,
         MASTER_REMINDER_AFTER_SECONDS,
         ADMIN_NO_OFFER_ALERT_AFTER_SECONDS,
+        CLIENT_FINISH_REMINDER_AFTER_SECONDS,
     )
 
     while not shutdown_event.is_set():
         try:
             await notify_masters_about_stale_orders(bot)
             await notify_admin_about_stale_orders(bot)
+            await notify_clients_about_finish_reminder(bot)
         except Exception:
             logger.exception("Stale orders watcher iteration failed")
 
