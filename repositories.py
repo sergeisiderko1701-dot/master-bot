@@ -1,5 +1,7 @@
 from typing import Optional
 
+import asyncpg
+
 from constants import normalize_categories_value, parse_categories
 from db import get_pool
 from utils import now_ts
@@ -9,28 +11,35 @@ from utils import now_ts
 # BASE HELPERS
 # =========================
 
-async def fetch(query: str, *args):
+async def _run_with_retry(method_name: str, query: str, *args):
     pool = get_pool()
-    async with pool.acquire() as conn:
-        return await conn.fetch(query, *args)
+
+    try:
+        async with pool.acquire() as conn:
+            method = getattr(conn, method_name)
+            return await method(query, *args)
+    except asyncpg.InvalidCachedStatementError:
+        # Після ALTER TABLE / зміни схеми asyncpg може тримати
+        # старий кешований план. Повторюємо запит ще раз.
+        async with pool.acquire() as conn:
+            method = getattr(conn, method_name)
+            return await method(query, *args)
+
+
+async def fetch(query: str, *args):
+    return await _run_with_retry("fetch", query, *args)
 
 
 async def fetchrow(query: str, *args):
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        return await conn.fetchrow(query, *args)
+    return await _run_with_retry("fetchrow", query, *args)
 
 
 async def fetchval(query: str, *args):
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        return await conn.fetchval(query, *args)
+    return await _run_with_retry("fetchval", query, *args)
 
 
 async def execute(query: str, *args):
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        return await conn.execute(query, *args)
+    return await _run_with_retry("execute", query, *args)
 
 
 # =========================
