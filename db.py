@@ -238,6 +238,24 @@ async def init_db(database_url: str):
         """)
 
         # =========================
+        # SPAM_LOGS
+        # =========================
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS spam_logs (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            action_key TEXT,
+            scope TEXT NOT NULL,
+            hit_count INTEGER,
+            limit_value INTEGER,
+            window_seconds INTEGER,
+            mute_seconds INTEGER,
+            reason_text TEXT,
+            created_at BIGINT NOT NULL
+        );
+        """)
+
+        # =========================
         # INDEXES: MASTERS
         # =========================
         await conn.execute("""
@@ -401,7 +419,7 @@ async def init_db(database_url: str):
         """)
 
         # =========================
-        # INDEXES: ORDER_EVENTS / AUDIT / COOLDOWNS
+        # INDEXES: ORDER_EVENTS / AUDIT / COOLDOWNS / SPAM
         # =========================
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_order_events_order_id
@@ -416,6 +434,21 @@ async def init_db(database_url: str):
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_user_cooldowns_user_action
         ON user_cooldowns(user_id, action_key);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_spam_logs_user_id
+        ON spam_logs(user_id);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_spam_logs_created_at
+        ON spam_logs(created_at DESC);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_spam_logs_scope
+        ON spam_logs(scope);
         """)
 
 
