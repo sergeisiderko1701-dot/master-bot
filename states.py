@@ -38,6 +38,7 @@ class ComplaintWrite(StatesGroup):
 
 class ProfileEdit(StatesGroup):
     value = State()
+    category = State()
 
 
 class RatingFlow(StatesGroup):
