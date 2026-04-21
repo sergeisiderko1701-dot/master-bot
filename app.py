@@ -9,6 +9,7 @@ from contextlib import suppress
 import asyncpg
 from aiogram import Bot, Dispatcher
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.contrib.fsm_storage.redis import RedisStorage2
 from aiogram.utils.exceptions import TerminatedByOtherGetUpdates
 
 import admin
@@ -45,6 +46,32 @@ def register_handlers(dp: Dispatcher) -> None:
     admin.register(dp)
     misc.register(dp)
     common.register(dp)
+
+
+def build_storage():
+    if settings.fsm_storage == "redis":
+        logger.info(
+            "Using Redis FSM storage: host=%s port=%s db=%s prefix=%s",
+            settings.redis_host,
+            settings.redis_port,
+            settings.redis_db,
+            settings.redis_prefix,
+        )
+        return RedisStorage2(
+            host=settings.redis_host,
+            port=settings.redis_port,
+            db=settings.redis_db,
+            password=settings.redis_password or None,
+            ssl=settings.redis_ssl,
+            pool_size=settings.redis_pool_size,
+            prefix=settings.redis_prefix,
+            state_ttl=settings.redis_state_ttl or None,
+            data_ttl=settings.redis_data_ttl or None,
+            bucket_ttl=settings.redis_bucket_ttl or None,
+        )
+
+    logger.warning("Using MemoryStorage for FSM")
+    return MemoryStorage()
 
 
 async def safe_close_storage(dp: Dispatcher | None):
@@ -108,7 +135,6 @@ async def safe_close_lock_conn(lock_conn):
 async def main():
     bot = None
     dp = None
-    storage = None
     lock_conn = None
     polling_task = None
     shutdown_wait_task = None
@@ -122,14 +148,10 @@ async def main():
         shutdown_event.set()
 
     try:
-        token = (settings.bot_token or "").strip()
-        if not token:
-            raise ValueError("BOT_TOKEN is empty")
+        settings.validate()
 
-        database_url = (settings.database_url or "").strip()
-        if not database_url:
-            raise ValueError("DATABASE_URL is empty")
-
+        token = settings.bot_token
+        database_url = settings.database_url
         enable_polling = os.getenv("ENABLE_POLLING", "true").lower() == "true"
 
         fingerprint = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
@@ -137,10 +159,11 @@ async def main():
 
         logger.info("PID: %s", os.getpid())
         logger.info("HOSTNAME: %s", socket.gethostname())
-        logger.info("APP_INSTANCE_NAME: %s", (settings.app_instance_name or "").strip() or "<empty>")
+        logger.info("APP_INSTANCE_NAME: %s", settings.app_instance_name or "<empty>")
         logger.info("BOT_TOKEN fingerprint: %s", fingerprint)
         logger.info("ENABLE_POLLING: %s", enable_polling)
         logger.info("LOCK_KEY: %s", lock_key)
+        logger.info("FSM_STORAGE: %s", settings.fsm_storage)
 
         if not enable_polling:
             logger.warning("Polling disabled for this instance. Exiting without polling.")
@@ -173,7 +196,7 @@ async def main():
         logger.info("Database initialized")
 
         bot = Bot(token=token, parse_mode="HTML")
-        storage = MemoryStorage()
+        storage = build_storage()
         dp = Dispatcher(bot, storage=storage)
 
         register_handlers(dp)
