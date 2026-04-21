@@ -42,8 +42,40 @@ CATEGORY_VALUE_TO_LABEL = {value: label for label, value in CATEGORIES}
 VALID_CATEGORIES = set(CATEGORY_VALUE_TO_LABEL.keys())
 
 
+def parse_categories(value) -> list[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, (list, tuple, set)):
+        raw = [str(v).strip() for v in value if str(v).strip()]
+    else:
+        raw = [part.strip() for part in str(value).split(",") if part.strip()]
+
+    result = []
+    seen = set()
+
+    for item in raw:
+        if item in VALID_CATEGORIES and item not in seen:
+            seen.add(item)
+            result.append(item)
+
+    return result
+
+
+def normalize_categories_value(value) -> str:
+    items = parse_categories(value)
+    return ",".join(items)
+
+
 def category_label(value: str) -> str:
     return CATEGORY_VALUE_TO_LABEL.get(value, value or "—")
+
+
+def category_labels(value) -> str:
+    items = parse_categories(value)
+    if not items:
+        return "—"
+    return ", ".join(category_label(item) for item in items)
 
 
 # =========================
