@@ -2,8 +2,9 @@ from typing import Optional
 
 import asyncpg
 
+from config import settings
 from constants import normalize_categories_value, parse_categories
-from db import get_pool
+from db import get_pool, reset_db_pool
 from utils import now_ts
 
 
@@ -20,11 +21,11 @@ async def _run_with_retry(method_name: str, query: str, *args):
             return await method(query, *args)
 
     except asyncpg.InvalidCachedStatementError:
-        # Після ALTER TABLE / зміни схеми asyncpg може тримати старі
-        # cached statement plans у вже відкритих конектах пулу.
-        # Примусово "старимо" всі поточні конекти пулу і повторюємо запит.
-        await pool.expire_connections()
+        # Після зміни схеми БД asyncpg може тримати старі cached plans.
+        # Повністю пересоздаємо pool і повторюємо запит.
+        await reset_db_pool(settings.database_url)
 
+        pool = get_pool()
         async with pool.acquire() as conn:
             method = getattr(conn, method_name)
             return await method(query, *args)
