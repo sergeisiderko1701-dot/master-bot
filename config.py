@@ -40,25 +40,67 @@ class Settings:
 
     app_instance_name: str = os.getenv("APP_INSTANCE_NAME", "unknown-instance").strip()
 
+    # Redis FSM
+    redis_host: str = os.getenv("REDIS_HOST", "localhost").strip()
+    redis_port: int = _to_int(os.getenv("REDIS_PORT"), 6379)
+    redis_db: int = _to_int(os.getenv("REDIS_DB"), 0)
+    redis_password: str = os.getenv("REDIS_PASSWORD", "").strip()
+    redis_ssl: bool = _to_bool(os.getenv("REDIS_SSL"), False)
+    redis_pool_size: int = _to_int(os.getenv("REDIS_POOL_SIZE"), 10)
+    redis_prefix: str = os.getenv("REDIS_PREFIX", "fsm").strip() or "fsm"
+    redis_state_ttl: int = _to_int(os.getenv("REDIS_STATE_TTL"), 86400)
+    redis_data_ttl: int = _to_int(os.getenv("REDIS_DATA_TTL"), 86400)
+    redis_bucket_ttl: int = _to_int(os.getenv("REDIS_BUCKET_TTL"), 86400)
+
     def validate(self):
         if not self.bot_token:
             raise ValueError("BOT_TOKEN is required")
+
         if not self.database_url:
             raise ValueError("DATABASE_URL is required")
+
         if self.admin_id < 0:
             raise ValueError("ADMIN_ID must be >= 0")
+
         if self.page_size <= 0:
             raise ValueError("PAGE_SIZE must be > 0")
+
         if self.client_order_cooldown < 0:
             raise ValueError("CLIENT_ORDER_COOLDOWN must be >= 0")
+
         if self.master_offer_cooldown < 0:
             raise ValueError("MASTER_OFFER_COOLDOWN must be >= 0")
+
         if self.max_active_client_orders <= 0:
             raise ValueError("MAX_ACTIVE_CLIENT_ORDERS must be > 0")
+
         if self.max_active_master_orders <= 0:
             raise ValueError("MAX_ACTIVE_MASTER_ORDERS must be > 0")
+
         if self.online_timeout < 0:
             raise ValueError("ONLINE_TIMEOUT must be >= 0")
 
+        if self.fsm_storage not in {"memory", "redis"}:
+            raise ValueError("FSM_STORAGE must be 'memory' or 'redis'")
+
+        if self.redis_port <= 0:
+            raise ValueError("REDIS_PORT must be > 0")
+
+        if self.redis_db < 0:
+            raise ValueError("REDIS_DB must be >= 0")
+
+        if self.redis_pool_size <= 0:
+            raise ValueError("REDIS_POOL_SIZE must be > 0")
+
+        if self.redis_state_ttl < 0:
+            raise ValueError("REDIS_STATE_TTL must be >= 0")
+
+        if self.redis_data_ttl < 0:
+            raise ValueError("REDIS_DATA_TTL must be >= 0")
+
+        if self.redis_bucket_ttl < 0:
+            raise ValueError("REDIS_BUCKET_TTL must be >= 0")
+
 
 settings = Settings()
+settings.validate()
