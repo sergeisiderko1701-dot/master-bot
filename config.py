@@ -40,7 +40,7 @@ class Settings:
 
     app_instance_name: str = os.getenv("APP_INSTANCE_NAME", "unknown-instance").strip()
 
-    # Redis FSM
+    # Redis FSM / Security
     redis_host: str = os.getenv("REDIS_HOST", "localhost").strip()
     redis_port: int = _to_int(os.getenv("REDIS_PORT"), 6379)
     redis_db: int = _to_int(os.getenv("REDIS_DB"), 0)
@@ -51,6 +51,13 @@ class Settings:
     redis_state_ttl: int = _to_int(os.getenv("REDIS_STATE_TTL"), 86400)
     redis_data_ttl: int = _to_int(os.getenv("REDIS_DATA_TTL"), 86400)
     redis_bucket_ttl: int = _to_int(os.getenv("REDIS_BUCKET_TTL"), 86400)
+
+    # Security / Anti-spam
+    security_prefix: str = os.getenv("SECURITY_PREFIX", "sec").strip() or "sec"
+    security_fail_open: bool = _to_bool(os.getenv("SECURITY_FAIL_OPEN"), True)
+    security_global_limit: int = _to_int(os.getenv("SECURITY_GLOBAL_LIMIT"), 40)
+    security_global_window_seconds: int = _to_int(os.getenv("SECURITY_GLOBAL_WINDOW_SECONDS"), 60)
+    security_global_mute_seconds: int = _to_int(os.getenv("SECURITY_GLOBAL_MUTE_SECONDS"), 300)
 
     def validate(self):
         if not self.bot_token:
@@ -100,6 +107,15 @@ class Settings:
 
         if self.redis_bucket_ttl < 0:
             raise ValueError("REDIS_BUCKET_TTL must be >= 0")
+
+        if self.security_global_limit < 0:
+            raise ValueError("SECURITY_GLOBAL_LIMIT must be >= 0")
+
+        if self.security_global_window_seconds <= 0:
+            raise ValueError("SECURITY_GLOBAL_WINDOW_SECONDS must be > 0")
+
+        if self.security_global_mute_seconds <= 0:
+            raise ValueError("SECURITY_GLOBAL_MUTE_SECONDS must be > 0")
 
 
 settings = Settings()
