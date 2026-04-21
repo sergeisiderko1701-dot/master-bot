@@ -4,6 +4,7 @@ from typing import Optional
 from redis.asyncio import Redis
 
 from config import settings
+from repositories import add_spam_log
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,32 @@ def _global_key(user_id: int) -> str:
 
 def _mute_key(user_id: int) -> str:
     return f"{_prefix()}:mute:{user_id}"
+
+
+async def _write_spam_log(
+    *,
+    user_id: int,
+    scope: str,
+    action_key: Optional[str] = None,
+    hit_count: Optional[int] = None,
+    limit_value: Optional[int] = None,
+    window_seconds: Optional[int] = None,
+    mute_seconds: Optional[int] = None,
+    reason_text: Optional[str] = None,
+):
+    try:
+        await add_spam_log(
+            user_id=user_id,
+            scope=scope,
+            action_key=action_key,
+            hit_count=hit_count,
+            limit_value=limit_value,
+            window_seconds=window_seconds,
+            mute_seconds=mute_seconds,
+            reason_text=reason_text,
+        )
+    except Exception as e:
+        logger.exception("Failed to write spam log for user_id=%s: %s", user_id, e)
 
 
 async def mute_user(user_id: int, mute_seconds: int):
@@ -88,6 +115,16 @@ async def _check_global_limit(user_id: int):
 
     if count > settings.security_global_limit:
         await mute_user(user_id, settings.security_global_mute_seconds)
+        await _write_spam_log(
+            user_id=user_id,
+            scope="global",
+            action_key=None,
+            hit_count=count,
+            limit_value=settings.security_global_limit,
+            window_seconds=settings.security_global_window_seconds,
+            mute_seconds=settings.security_global_mute_seconds,
+            reason_text="Global anti-spam limit exceeded",
+        )
         return (
             False,
             f"⛔ Забагато дій за короткий час. Спробуйте через "
@@ -110,6 +147,16 @@ async def register_action_and_check(
     try:
         mute_left = await get_mute_left(user_id)
         if mute_left > 0:
+            await _write_spam_log(
+                user_id=user_id,
+                scope="mute_block",
+                action_key=action_key,
+                hit_count=None,
+                limit_value=None,
+                window_seconds=None,
+                mute_seconds=mute_left,
+                reason_text="Blocked by active mute",
+            )
             return False, f"⏳ Забагато дій. Спробуйте ще раз через {mute_left} сек."
 
         allowed, global_error = await _check_global_limit(user_id)
@@ -123,6 +170,7 @@ async def register_action_and_check(
 
         if action_count > int(limit):
             await mute_user(user_id, mute_seconds)
+
             logger.warning(
                 "Rate limit hit: user_id=%s action=%s count=%s limit=%s window=%s mute=%s",
                 user_id,
@@ -132,6 +180,18 @@ async def register_action_and_check(
                 window_seconds,
                 mute_seconds,
             )
+
+            await _write_spam_log(
+                user_id=user_id,
+                scope="action",
+                action_key=action_key,
+                hit_count=action_count,
+                limit_value=limit,
+                window_seconds=window_seconds,
+                mute_seconds=mute_seconds,
+                reason_text="Action rate limit exceeded",
+            )
+
             return False, f"⛔ Тимчасове обмеження. Спробуйте через {mute_seconds} сек."
 
         return True, None
@@ -143,6 +203,20 @@ async def register_action_and_check(
             action_key,
             e,
         )
+
+        try:
+            await _write_spam_log(
+                user_id=user_id,
+                scope="security_error",
+                action_key=action_key,
+                hit_count=None,
+                limit_value=limit,
+                window_seconds=window_seconds,
+                mute_seconds=mute_seconds,
+                reason_text=f"Security backend error: {e}",
+            )
+        except Exception:
+            pass
 
         if settings.security_fail_open:
             return True, None
