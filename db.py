@@ -53,7 +53,8 @@ async def init_db(database_url: str):
             status_reason_code TEXT,
             status_reason_text TEXT,
             created_at BIGINT,
-            updated_at BIGINT
+            updated_at BIGINT,
+            admin_no_offer_alert_sent_at BIGINT
         );
         """)
 
@@ -80,6 +81,11 @@ async def init_db(database_url: str):
         await conn.execute("""
         ALTER TABLE orders
         ADD COLUMN IF NOT EXISTS updated_at BIGINT;
+        """)
+
+        await conn.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS admin_no_offer_alert_sent_at BIGINT;
         """)
 
         # =========================
@@ -114,7 +120,6 @@ async def init_db(database_url: str):
 
         # =========================
         # CHAT_MESSAGES
-        # Актуальна схема під repositories.py / offers.py
         # =========================
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS chat_messages (
@@ -130,7 +135,6 @@ async def init_db(database_url: str):
         );
         """)
 
-        # Сумісність зі старими версіями схеми
         await conn.execute("""
         ALTER TABLE chat_messages
         ADD COLUMN IF NOT EXISTS message_type TEXT;
@@ -146,7 +150,6 @@ async def init_db(database_url: str):
         ADD COLUMN IF NOT EXISTS file_id TEXT;
         """)
 
-        # Старі поля залишаємо тимчасово для сумісності / старих даних
         await conn.execute("""
         ALTER TABLE chat_messages
         ADD COLUMN IF NOT EXISTS message_text TEXT;
@@ -319,6 +322,11 @@ async def init_db(database_url: str):
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_orders_updated_at
         ON orders(updated_at DESC);
+        """)
+
+        await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_orders_admin_no_offer_alert_sent_at
+        ON orders(admin_no_offer_alert_sent_at);
         """)
 
         # =========================
