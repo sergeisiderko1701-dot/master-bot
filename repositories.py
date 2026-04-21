@@ -33,6 +33,47 @@ async def execute(query: str, *args):
 
 
 # =========================
+# SPAM LOGS
+# =========================
+
+async def add_spam_log(
+    user_id: int,
+    scope: str,
+    action_key: Optional[str] = None,
+    hit_count: Optional[int] = None,
+    limit_value: Optional[int] = None,
+    window_seconds: Optional[int] = None,
+    mute_seconds: Optional[int] = None,
+    reason_text: Optional[str] = None,
+):
+    await execute(
+        """
+        INSERT INTO spam_logs (
+            user_id,
+            action_key,
+            scope,
+            hit_count,
+            limit_value,
+            window_seconds,
+            mute_seconds,
+            reason_text,
+            created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        """,
+        user_id,
+        action_key,
+        scope,
+        hit_count,
+        limit_value,
+        window_seconds,
+        mute_seconds,
+        reason_text,
+        now_ts(),
+    )
+
+
+# =========================
 # MASTERS
 # =========================
 
