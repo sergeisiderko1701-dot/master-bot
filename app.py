@@ -325,8 +325,11 @@ async def main():
         logger.info("Database initialized")
 
         bot = Bot(token=token, parse_mode="HTML")
+        Bot.set_current(bot)
+
         storage = build_storage()
         dp = Dispatcher(bot, storage=storage)
+        Dispatcher.set_current(dp)
 
         register_handlers(dp)
         register_error_handlers(dp)
