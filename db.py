@@ -41,6 +41,79 @@ async def init_db(database_url: str):
             """
         )
 
+        await conn.execute(
+            """
+            ALTER TABLE masters
+            ADD COLUMN IF NOT EXISTS district TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE masters
+            ADD COLUMN IF NOT EXISTS phone TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE masters
+            ADD COLUMN IF NOT EXISTS description TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE masters
+            ADD COLUMN IF NOT EXISTS experience TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE masters
+            ADD COLUMN IF NOT EXISTS photo TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE masters
+            ADD COLUMN IF NOT EXISTS rating DOUBLE PRECISION DEFAULT 0
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE masters
+            ADD COLUMN IF NOT EXISTS reviews_count INTEGER DEFAULT 0
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE masters
+            ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE masters
+            ADD COLUMN IF NOT EXISTS availability TEXT DEFAULT 'offline'
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE masters
+            ADD COLUMN IF NOT EXISTS last_seen BIGINT DEFAULT 0
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE masters
+            ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE masters
+            ADD COLUMN IF NOT EXISTS updated_at BIGINT DEFAULT 0
+            """
+        )
+
         # =========================
         # ORDERS
         # =========================
@@ -72,6 +145,18 @@ async def init_db(database_url: str):
         await conn.execute(
             """
             ALTER TABLE orders
+            ADD COLUMN IF NOT EXISTS district TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE orders
+            ADD COLUMN IF NOT EXISTS problem TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE orders
             ADD COLUMN IF NOT EXISTS client_phone TEXT
             """
         )
@@ -85,6 +170,12 @@ async def init_db(database_url: str):
             """
             ALTER TABLE orders
             ADD COLUMN IF NOT EXISTS media_file_id TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE orders
+            ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'new'
             """
         )
         await conn.execute(
@@ -129,6 +220,18 @@ async def init_db(database_url: str):
             ADD COLUMN IF NOT EXISTS client_offer_reminder_sent_at BIGINT
             """
         )
+        await conn.execute(
+            """
+            ALTER TABLE orders
+            ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE orders
+            ADD COLUMN IF NOT EXISTS updated_at BIGINT DEFAULT 0
+            """
+        )
 
         # =========================
         # OFFERS
@@ -148,6 +251,37 @@ async def init_db(database_url: str):
             """
         )
 
+        await conn.execute(
+            """
+            ALTER TABLE offers
+            ADD COLUMN IF NOT EXISTS price TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE offers
+            ADD COLUMN IF NOT EXISTS eta TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE offers
+            ADD COLUMN IF NOT EXISTS comment TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE offers
+            ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE offers
+            ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0
+            """
+        )
+
         # =========================
         # CHATS
         # =========================
@@ -161,6 +295,19 @@ async def init_db(database_url: str):
                 status TEXT DEFAULT 'active',
                 created_at BIGINT DEFAULT 0
             )
+            """
+        )
+
+        await conn.execute(
+            """
+            ALTER TABLE chats
+            ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE chats
+            ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0
             """
         )
 
@@ -183,6 +330,32 @@ async def init_db(database_url: str):
             """
         )
 
+        await conn.execute(
+            """
+            ALTER TABLE chat_messages
+            ADD COLUMN IF NOT EXISTS message_type TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE chat_messages
+            ADD COLUMN IF NOT EXISTS text TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE chat_messages
+            ADD COLUMN IF NOT EXISTS file_id TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE chat_messages
+            ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0
+            """
+        )
+
+        # старі поля, якщо ще десь залишились
         await conn.execute(
             """
             ALTER TABLE chat_messages
@@ -219,6 +392,19 @@ async def init_db(database_url: str):
             """
         )
 
+        await conn.execute(
+            """
+            ALTER TABLE complaints
+            ADD COLUMN IF NOT EXISTS text TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE complaints
+            ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0
+            """
+        )
+
         # =========================
         # ORDER EVENTS
         # =========================
@@ -238,6 +424,49 @@ async def init_db(database_url: str):
             """
         )
 
+        await conn.execute(
+            """
+            ALTER TABLE order_events
+            ADD COLUMN IF NOT EXISTS event_type TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE order_events
+            ADD COLUMN IF NOT EXISTS from_status TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE order_events
+            ADD COLUMN IF NOT EXISTS to_status TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE order_events
+            ADD COLUMN IF NOT EXISTS actor_user_id BIGINT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE order_events
+            ADD COLUMN IF NOT EXISTS actor_role TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE order_events
+            ADD COLUMN IF NOT EXISTS payload TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE order_events
+            ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0
+            """
+        )
+
         # =========================
         # USER COOLDOWNS
         # =========================
@@ -249,6 +478,13 @@ async def init_db(database_url: str):
                 last_at BIGINT DEFAULT 0,
                 PRIMARY KEY (user_id, action_key)
             )
+            """
+        )
+
+        await conn.execute(
+            """
+            ALTER TABLE user_cooldowns
+            ADD COLUMN IF NOT EXISTS last_at BIGINT DEFAULT 0
             """
         )
 
@@ -272,6 +508,55 @@ async def init_db(database_url: str):
             """
         )
 
+        await conn.execute(
+            """
+            ALTER TABLE spam_logs
+            ADD COLUMN IF NOT EXISTS action_key TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE spam_logs
+            ADD COLUMN IF NOT EXISTS scope TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE spam_logs
+            ADD COLUMN IF NOT EXISTS hit_count INTEGER
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE spam_logs
+            ADD COLUMN IF NOT EXISTS limit_value INTEGER
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE spam_logs
+            ADD COLUMN IF NOT EXISTS window_seconds INTEGER
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE spam_logs
+            ADD COLUMN IF NOT EXISTS mute_seconds INTEGER
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE spam_logs
+            ADD COLUMN IF NOT EXISTS reason_text TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE spam_logs
+            ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0
+            """
+        )
+
         # =========================
         # SUPPORT MESSAGES
         # =========================
@@ -283,6 +568,19 @@ async def init_db(database_url: str):
                 text TEXT,
                 created_at BIGINT DEFAULT 0
             )
+            """
+        )
+
+        await conn.execute(
+            """
+            ALTER TABLE support_messages
+            ADD COLUMN IF NOT EXISTS text TEXT
+            """
+        )
+        await conn.execute(
+            """
+            ALTER TABLE support_messages
+            ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0
             """
         )
 
@@ -309,6 +607,7 @@ async def init_db(database_url: str):
             CREATE INDEX IF NOT EXISTS idx_masters_user_id ON masters(user_id)
             """
         )
+
         await conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)
@@ -329,6 +628,7 @@ async def init_db(database_url: str):
             CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at)
             """
         )
+
         await conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_offers_order_id ON offers(order_id)
@@ -344,11 +644,13 @@ async def init_db(database_url: str):
             CREATE INDEX IF NOT EXISTS idx_offers_status ON offers(status)
             """
         )
+
         await conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_chats_order_id ON chats(order_id)
             """
         )
+
         await conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_chat_messages_order_id ON chat_messages(order_id)
@@ -359,16 +661,24 @@ async def init_db(database_url: str):
             CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id)
             """
         )
+
         await conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_complaints_order_id ON complaints(order_id)
             """
         )
+
         await conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_order_events_order_id ON order_events(order_id)
             """
         )
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_order_events_created_at ON order_events(created_at)
+            """
+        )
+
         await conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_spam_logs_user_id ON spam_logs(user_id)
