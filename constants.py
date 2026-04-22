@@ -2,6 +2,7 @@
 # LIMITS
 # =========================
 # Залишаємо для сумісності, якщо десь у коді ще є імпорти з constants.
+# Основним джерелом runtime-значень надалі бажано зробити config.py.
 
 CLIENT_ORDER_COOLDOWN = 30
 MASTER_OFFER_COOLDOWN = 15
@@ -19,21 +20,22 @@ PAGE_SIZE = 5
 
 CATEGORY_PLUMBER = "plumber"
 CATEGORY_ELECTRICIAN = "electrician"
-CATEGORY_REPAIR = "repair"
-CATEGORY_WASHING = "washing"
-CATEGORY_AC = "ac"
+CATEGORY_AIR_CONDITIONERS = "air_conditioners"
+CATEGORY_WASHING_MACHINES = "washing_machines"
 CATEGORY_FURNITURE = "furniture"
-CATEGORY_DOORS = "doors"
+CATEGORY_DOORS_LOCKS = "doors_locks"
+CATEGORY_REPAIR = "repair"
 CATEGORY_CLEANING = "cleaning"
 
+# Порядок важливий: саме так категорії будуть показуватися в UI
 CATEGORIES = [
     ("🚰 Сантехнік", CATEGORY_PLUMBER),
     ("⚡ Електрик", CATEGORY_ELECTRICIAN),
-    ("🛠 Ремонт", CATEGORY_REPAIR),
-    ("🧺 Пральні машини", CATEGORY_WASHING),
-    ("❄️ Кондиціонери", CATEGORY_AC),
+    ("❄️ Кондиціонери", CATEGORY_AIR_CONDITIONERS),
+    ("🧺 Пральні машини", CATEGORY_WASHING_MACHINES),
     ("🪑 Меблі", CATEGORY_FURNITURE),
-    ("🚪 Двері / замки", CATEGORY_DOORS),
+    ("🚪 Двері/замки", CATEGORY_DOORS_LOCKS),
+    ("🛠 Ремонт", CATEGORY_REPAIR),
     ("🧹 Прибирання", CATEGORY_CLEANING),
 ]
 
@@ -42,40 +44,43 @@ CATEGORY_VALUE_TO_LABEL = {value: label for label, value in CATEGORIES}
 VALID_CATEGORIES = set(CATEGORY_VALUE_TO_LABEL.keys())
 
 
-def parse_categories(value) -> list[str]:
-    if value is None:
-        return []
-
-    if isinstance(value, (list, tuple, set)):
-        raw = [str(v).strip() for v in value if str(v).strip()]
-    else:
-        raw = [part.strip() for part in str(value).split(",") if part.strip()]
-
-    result = []
-    seen = set()
-
-    for item in raw:
-        if item in VALID_CATEGORIES and item not in seen:
-            seen.add(item)
-            result.append(item)
-
-    return result
-
-
-def normalize_categories_value(value) -> str:
-    items = parse_categories(value)
-    return ",".join(items)
-
-
 def category_label(value: str) -> str:
     return CATEGORY_VALUE_TO_LABEL.get(value, value or "—")
 
 
+def parse_categories(value) -> list[str]:
+    if not value:
+        return []
+
+    if isinstance(value, (list, tuple, set)):
+        result = []
+        for item in value:
+            item = str(item).strip()
+            if item:
+                result.append(item)
+        return result
+
+    return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def normalize_categories_value(value) -> str:
+    categories = parse_categories(value)
+    unique = []
+    seen = set()
+
+    for item in categories:
+        if item in VALID_CATEGORIES and item not in seen:
+            unique.append(item)
+            seen.add(item)
+
+    return ",".join(unique)
+
+
 def category_labels(value) -> str:
-    items = parse_categories(value)
-    if not items:
+    categories = parse_categories(value)
+    if not categories:
         return "—"
-    return ", ".join(category_label(item) for item in items)
+    return ", ".join(category_label(item) for item in categories)
 
 
 # =========================
