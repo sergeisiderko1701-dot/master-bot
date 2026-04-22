@@ -47,10 +47,12 @@ from ui_texts import (
     client_master_selected_text,
     master_selected_for_master_text,
     offer_card_text,
+    order_reopened_text,
     rating_thanks,
     tip_master_offer,
     tip_master_selected,
     tip_no_response,
+    tip_reopen_order,
 )
 from utils import is_admin, normalize_text, now_ts
 
@@ -492,10 +494,8 @@ def register(dp):
             await call.answer("Не вдалося повторно відкрити заявку.", show_alert=True)
             return
 
-        await call.message.answer(
-            f"🔄 <b>Заявку #{order_id} повторно відкрито</b>\n\n"
-            "Попереднього майстра відключено від цієї заявки.",
-        )
+        await call.message.answer(order_reopened_text(order_id))
+        await call.message.answer(tip_reopen_order())
 
         active_offers = await list_order_offers(order_id)
 
