@@ -4,13 +4,24 @@ import logging
 import os
 import signal
 import socket
+import traceback
 from contextlib import suppress
 
 import asyncpg
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.contrib.fsm_storage.redis import RedisStorage2
-from aiogram.utils.exceptions import TerminatedByOtherGetUpdates
+from aiogram.utils.exceptions import (
+    BotBlocked,
+    ChatNotFound,
+    InvalidQueryID,
+    MessageCantBeDeleted,
+    MessageNotModified,
+    RetryAfter,
+    TerminatedByOtherGetUpdates,
+    TelegramAPIError,
+    UserDeactivated,
+)
 
 import admin
 import client
@@ -43,6 +54,75 @@ def register_handlers(dp: Dispatcher) -> None:
     admin.register(dp)
     misc.register(dp)
     common.register(dp)
+
+
+def register_error_handlers(dp: Dispatcher) -> None:
+    @dp.errors_handler()
+    async def global_error_handler(update, error):
+        update_repr = repr(update)
+        error_trace = "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        )
+
+        logger.exception(
+            "UNHANDLED ERROR | update=%s\n%s",
+            update_repr,
+            error_trace,
+        )
+
+        # Тихі Telegram-помилки, які не треба показувати користувачу як критичні
+        if isinstance(
+            error,
+            (
+                MessageNotModified,
+                MessageCantBeDeleted,
+                InvalidQueryID,
+                BotBlocked,
+                ChatNotFound,
+                UserDeactivated,
+            ),
+        ):
+            return True
+
+        if isinstance(error, RetryAfter):
+            logger.warning("Telegram flood control: retry after %s sec", error.timeout)
+            return True
+
+        if isinstance(error, TelegramAPIError):
+            logger.warning("Telegram API error: %s", error)
+        else:
+            logger.error("Unexpected error type: %s", type(error).__name__)
+
+        # Показуємо користувачу нормальне повідомлення
+        try:
+            if isinstance(update, types.Update):
+                if update.callback_query:
+                    try:
+                        await update.callback_query.answer(
+                            "⚠️ Сталася технічна помилка. Спробуйте ще раз.",
+                            show_alert=True,
+                        )
+                    except Exception:
+                        pass
+
+                    try:
+                        await update.callback_query.message.answer(
+                            "⚠️ Сталася технічна помилка. Спробуйте ще раз через кілька секунд."
+                        )
+                    except Exception:
+                        pass
+
+                elif update.message:
+                    try:
+                        await update.message.answer(
+                            "⚠️ Сталася технічна помилка. Спробуйте ще раз через кілька секунд."
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            logger.exception("Failed to send error message to user")
+
+        return True
 
 
 def build_storage():
@@ -198,6 +278,7 @@ async def main():
         dp = Dispatcher(bot, storage=storage)
 
         register_handlers(dp)
+        register_error_handlers(dp)
 
         me = await bot.get_me()
         logger.info(
