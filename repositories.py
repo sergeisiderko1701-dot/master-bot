@@ -46,6 +46,44 @@ async def execute(query: str, *args):
 
 
 # =========================
+# ORDER EVENTS
+# =========================
+
+async def add_order_event(
+    order_id: int,
+    event_type: str,
+    from_status: Optional[str] = None,
+    to_status: Optional[str] = None,
+    actor_user_id: Optional[int] = None,
+    actor_role: Optional[str] = None,
+    payload: Optional[str] = None,
+):
+    await execute(
+        """
+        INSERT INTO order_events (
+            order_id,
+            event_type,
+            from_status,
+            to_status,
+            actor_user_id,
+            actor_role,
+            payload,
+            created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """,
+        order_id,
+        event_type,
+        from_status,
+        to_status,
+        actor_user_id,
+        actor_role,
+        payload,
+        now_ts(),
+    )
+
+
+# =========================
 # SPAM LOGS
 # =========================
 
@@ -345,7 +383,19 @@ async def create_order(
         media_file_id,
         ts,
     )
-    return int(row["id"])
+    order_id = int(row["id"])
+
+    await add_order_event(
+        order_id=order_id,
+        event_type="order_created",
+        from_status=None,
+        to_status="new",
+        actor_user_id=user_id,
+        actor_role="client",
+        payload=f"category={category};district={district or ''}",
+    )
+
+    return order_id
 
 
 async def get_order_row(order_id: int):
@@ -385,6 +435,13 @@ async def list_admin_orders(limit: int, offset: int, status_filter: Optional[str
 
 
 async def set_order_status(order_id: int, status: str, selected_master_id=None):
+    current = await fetchrow(
+        "SELECT status, selected_master_id FROM orders WHERE id=$1",
+        order_id,
+    )
+    if not current:
+        return
+
     await execute(
         """
         UPDATE orders
@@ -399,11 +456,28 @@ async def set_order_status(order_id: int, status: str, selected_master_id=None):
         order_id,
     )
 
+    await add_order_event(
+        order_id=order_id,
+        event_type="order_status_changed",
+        from_status=current["status"],
+        to_status=status,
+        actor_user_id=None,
+        actor_role="system",
+        payload=f"selected_master_id={selected_master_id}",
+    )
+
 
 async def cancel_order(order_id: int):
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            order = await conn.fetchrow(
+                "SELECT * FROM orders WHERE id=$1 FOR UPDATE",
+                order_id,
+            )
+            if not order:
+                return
+
             await conn.execute(
                 "UPDATE orders SET status='cancelled', updated_at=$1 WHERE id=$2",
                 now_ts(),
@@ -417,6 +491,16 @@ async def cancel_order(order_id: int):
                 "UPDATE chats SET status='closed' WHERE order_id=$1",
                 order_id,
             )
+
+    await add_order_event(
+        order_id=order_id,
+        event_type="order_cancelled",
+        from_status=order["status"],
+        to_status="cancelled",
+        actor_user_id=order["user_id"],
+        actor_role="client",
+        payload=None,
+    )
 
 
 async def refuse_order(order_id: int):
@@ -490,6 +574,16 @@ async def refuse_order(order_id: int):
                 "UPDATE chats SET status='closed' WHERE order_id=$1",
                 order_id,
             )
+
+    await add_order_event(
+        order_id=order_id,
+        event_type="master_refused",
+        from_status=order["status"],
+        to_status=new_status,
+        actor_user_id=selected_master_id,
+        actor_role="master",
+        payload=f"active_offers_after={int(active_offers_count or 0)}",
+    )
 
 
 async def reopen_order_by_client(order_id: int, client_user_id: int):
@@ -569,16 +663,35 @@ async def reopen_order_by_client(order_id: int, client_user_id: int):
                 order_id,
             )
 
-            return await conn.fetchrow(
+            updated_order = await conn.fetchrow(
                 "SELECT * FROM orders WHERE id=$1",
                 order_id,
             )
+
+    await add_order_event(
+        order_id=order_id,
+        event_type="order_reopened_by_client",
+        from_status=order["status"],
+        to_status=new_status,
+        actor_user_id=client_user_id,
+        actor_role="client",
+        payload=f"previous_master_id={selected_master_id};active_offers_after={int(active_offers_count or 0)}",
+    )
+
+    return updated_order
 
 
 async def finish_order(order_id: int):
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            order = await conn.fetchrow(
+                "SELECT * FROM orders WHERE id=$1 FOR UPDATE",
+                order_id,
+            )
+            if not order:
+                return
+
             await conn.execute(
                 "UPDATE orders SET status='done', updated_at=$1 WHERE id=$2",
                 now_ts(),
@@ -588,6 +701,16 @@ async def finish_order(order_id: int):
                 "UPDATE chats SET status='closed' WHERE order_id=$1",
                 order_id,
             )
+
+    await add_order_event(
+        order_id=order_id,
+        event_type="order_finished",
+        from_status=order["status"],
+        to_status="done",
+        actor_user_id=order["selected_master_id"],
+        actor_role="master",
+        payload=None,
+    )
 
 
 async def admin_stats():
@@ -676,6 +799,8 @@ async def create_offer(
                 now_ts(),
             )
 
+            previous_status = order["status"]
+
             await conn.execute(
                 """
                 UPDATE orders
@@ -687,7 +812,19 @@ async def create_offer(
                 order_id,
             )
 
-            return row["id"]
+            offer_id = row["id"]
+
+    await add_order_event(
+        order_id=order_id,
+        event_type="offer_created",
+        from_status=previous_status,
+        to_status="offered",
+        actor_user_id=master_user_id,
+        actor_role="master",
+        payload=f"offer_id={offer_id};price={price};eta={eta}",
+    )
+
+    return offer_id
 
 
 async def list_order_offers(order_id: int):
@@ -814,10 +951,22 @@ async def choose_offer(offer_id: int, client_user_id: int):
                     now_ts(),
                 )
 
-            return await conn.fetchrow(
+            selected_offer = await conn.fetchrow(
                 "SELECT * FROM offers WHERE id=$1",
                 offer_id,
             )
+
+    await add_order_event(
+        order_id=offer["order_id"],
+        event_type="offer_chosen",
+        from_status=order["status"],
+        to_status="matched",
+        actor_user_id=client_user_id,
+        actor_role="client",
+        payload=f"offer_id={offer_id};master_user_id={offer['master_user_id']}",
+    )
+
+    return selected_offer
 
 
 # =========================
@@ -1087,4 +1236,16 @@ async def rate_order(order_id: int, client_user_id: int, rating: int, review_tex
                 master_user_id,
             )
 
-            return await conn.fetchrow("SELECT * FROM orders WHERE id=$1", order_id)
+            updated_order = await conn.fetchrow("SELECT * FROM orders WHERE id=$1", order_id)
+
+    await add_order_event(
+        order_id=order_id,
+        event_type="order_rated",
+        from_status="done",
+        to_status="done",
+        actor_user_id=client_user_id,
+        actor_role="client",
+        payload=f"rating={rating};review={'1' if review_text else '0'}",
+    )
+
+    return updated_order
