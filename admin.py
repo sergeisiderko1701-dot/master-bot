@@ -59,6 +59,19 @@ STATUS_FILTER_MAP = {
 }
 
 
+EVENT_TYPE_LABELS = {
+    "order_created": "🆕 Заявку створено",
+    "offer_created": "📨 Майстер відгукнувся",
+    "offer_chosen": "✅ Клієнт обрав майстра",
+    "master_refused": "❌ Майстер відмовився",
+    "order_reopened_by_client": "🔄 Клієнт повторно відкрив заявку",
+    "order_cancelled": "🚫 Клієнт скасував заявку",
+    "order_finished": "🏁 Заявку завершено",
+    "order_rated": "⭐ Клієнт залишив оцінку",
+    "order_status_changed": "🔁 Статус заявки змінено",
+}
+
+
 def _reply_kb(rows):
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     for row in rows:
@@ -196,6 +209,40 @@ def _broadcast_mode_label(mode: str) -> str:
     if mode == "clients":
         return "клієнтам"
     return mode
+
+
+def _fmt_ts(ts_value) -> str:
+    if not ts_value:
+        return "—"
+    try:
+        import datetime as _dt
+        dt = _dt.datetime.fromtimestamp(int(ts_value))
+        return dt.strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return str(ts_value)
+
+
+def _event_title(event_type: str) -> str:
+    return EVENT_TYPE_LABELS.get(event_type or "", event_type or "event")
+
+
+def _event_payload_text(payload: str) -> str:
+    if not payload:
+        return ""
+
+    parts = [p.strip() for p in str(payload).split(";") if p.strip()]
+    if not parts:
+        return ""
+
+    return "\n".join(f"   └ {part}" for part in parts)
+
+
+def _event_actor_text(actor_role: str, actor_user_id) -> str:
+    if not actor_role and not actor_user_id:
+        return "system"
+    if actor_user_id:
+        return f"{actor_role or 'user'}:{actor_user_id}"
+    return actor_role or "system"
 
 
 async def _get_unique_recipient_ids(mode: str):
@@ -368,24 +415,37 @@ def register(dp):
             f"🧾 <b>Історія заявки #{order_id}</b>",
             "",
             f"📌 Поточний статус: <b>{status_label(order['status'])}</b>",
-            f"📬 Пропозицій: <b>{int(offers_count['c'])}</b>",
+            f"📬 Всього офферів: <b>{int(offers_count['c'])}</b>",
             f"💬 Повідомлень у чаті: <b>{int(chat_count['c'])}</b>",
             f"⚠️ Скарг: <b>{int(complaints_count['c'])}</b>",
             "",
+            "<b>Події:</b>",
         ]
 
         if events:
-            lines.append("<b>Події:</b>")
             for ev in events:
+                title = _event_title(ev["event_type"])
+                created_at = _fmt_ts(ev["created_at"])
+                actor = _event_actor_text(ev["actor_role"], ev["actor_user_id"])
+
+                status_line = ""
+                if ev["from_status"] or ev["to_status"]:
+                    status_line = (
+                        f"\n   └ статус: {ev['from_status'] or '—'} → {ev['to_status'] or '—'}"
+                    )
+
+                payload_text = _event_payload_text(ev["payload"])
+                if payload_text:
+                    payload_text = "\n" + payload_text
+
                 lines.append(
-                    f"• {ev['event_type'] or 'event'} | "
-                    f"{ev['from_status'] or '—'} → {ev['to_status'] or '—'} | "
-                    f"actor={ev['actor_role'] or '—'}:{ev['actor_user_id'] or '—'}"
+                    f"• <b>{title}</b> [{created_at}]"
+                    f"\n   └ actor: {actor}"
+                    f"{status_line}"
+                    f"{payload_text}"
                 )
         else:
-            lines.append("<b>Події:</b>")
-            lines.append("• Історія подій ще не накопичується окремо.")
-            lines.append("• Можна орієнтуватися по статусу, офферах, чатах і скаргах.")
+            lines.append("• Подій поки немає.")
 
         await bot.send_message(
             chat_id,
@@ -578,10 +638,6 @@ def register(dp):
             reply_markup=admin_menu_kb(),
         )
 
-    # =========================
-    # ADMIN ROOT
-    # =========================
-
     @dp.message_handler(lambda m: m.text == "👑 Адмін", state="*")
     async def admin_root(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
@@ -641,10 +697,6 @@ def register(dp):
         if not is_admin(message.from_user.id):
             return
         await admin_statistics_command(message, state)
-
-    # =========================
-    # BROADCAST
-    # =========================
 
     @dp.message_handler(lambda m: m.text == "📣 СМС розсилка", state="*")
     async def broadcast_menu(message: types.Message, state: FSMContext):
@@ -779,10 +831,6 @@ def register(dp):
             reply_markup=admin_menu_kb(),
         )
         await call.answer("Скасовано")
-
-    # =========================
-    # MASTERS
-    # =========================
 
     @dp.message_handler(lambda m: m.text == "📝 Модерація майстрів", state="*")
     async def pending_masters(message: types.Message, state: FSMContext):
@@ -952,10 +1000,6 @@ def register(dp):
         await _show_master_by_user_id(call.message.chat.id, master_user_id, dp.bot)
         await call.answer()
 
-    # =========================
-    # ORDERS
-    # =========================
-
     @dp.message_handler(lambda m: m.text == "📦 Заявки", state="*")
     async def admin_orders(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
@@ -1063,10 +1107,6 @@ def register(dp):
         await close_chat(order_id)
         await call.message.answer("🔄 Заявку повернуто в статус 'нова'.")
         await call.answer("Готово")
-
-    # =========================
-    # SEARCH
-    # =========================
 
     @dp.message_handler(lambda m: m.text == "🔎 Пошук заявки", state="*")
     async def search_order_start(message: types.Message, state: FSMContext):
@@ -1182,19 +1222,11 @@ def register(dp):
         await state.finish()
         await _show_master_by_user_id(message.chat.id, master_user_id, dp.bot)
 
-    # =========================
-    # STALE ORDERS
-    # =========================
-
     @dp.message_handler(lambda m: m.text == "📦 Завислі заявки", state="*")
     async def stale_orders(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             return
         await _show_stale_orders(message.chat.id, dp.bot)
-
-    # =========================
-    # COMPLAINTS
-    # =========================
 
     @dp.message_handler(lambda m: m.text == "⚠️ Скарги", state="*")
     async def admin_complaints(message: types.Message, state: FSMContext):
@@ -1247,10 +1279,6 @@ def register(dp):
         await execute("DELETE FROM complaints WHERE id=$1", complaint_id)
         await call.message.answer("🗑 Скаргу видалено.")
         await call.answer("Готово")
-
-    # =========================
-    # SUPPORT REPLY
-    # =========================
 
     @dp.callback_query_handler(lambda c: c.data.startswith("support_reply_"), state="*")
     async def support_reply_start(call: types.CallbackQuery, state: FSMContext):
