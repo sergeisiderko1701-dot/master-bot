@@ -8,7 +8,6 @@ from contextlib import suppress
 
 import asyncpg
 from aiogram import Bot, Dispatcher, types
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.contrib.fsm_storage.redis import RedisStorage2
 from aiogram.utils.exceptions import (
     BotBlocked,
@@ -101,30 +100,70 @@ def register_error_handlers(dp: Dispatcher) -> None:
         return True
 
 
-def build_storage():
-    if settings.fsm_storage == "redis":
+async def _ensure_redis_available() -> None:
+    """
+    Жорстка перевірка Redis на старті.
+    Якщо Redis недоступний — краще не запускати бота взагалі,
+    ніж втрачати FSM-стани посеред сценаріїв.
+    """
+    from redis.asyncio import Redis
+
+    redis = Redis(
+        host=settings.redis_host,
+        port=settings.redis_port,
+        db=settings.redis_db,
+        password=settings.redis_password or None,
+        ssl=settings.redis_ssl,
+        decode_responses=True,
+    )
+
+    try:
+        pong = await redis.ping()
+        if not pong:
+            raise RuntimeError("Redis ping returned falsy result")
         logger.info(
-            "Using Redis FSM storage: host=%s port=%s db=%s prefix=%s",
+            "Redis connection OK: host=%s port=%s db=%s",
             settings.redis_host,
             settings.redis_port,
             settings.redis_db,
-            settings.redis_prefix,
         )
-        return RedisStorage2(
-            host=settings.redis_host,
-            port=settings.redis_port,
-            db=settings.redis_db,
-            password=settings.redis_password or None,
-            ssl=settings.redis_ssl,
-            pool_size=settings.redis_pool_size,
-            prefix=settings.redis_prefix,
-            state_ttl=settings.redis_state_ttl or None,
-            data_ttl=settings.redis_data_ttl or None,
-            bucket_ttl=settings.redis_bucket_ttl or None,
+    finally:
+        try:
+            await redis.close()
+        except Exception:
+            logger.exception("Failed to close Redis startup check client")
+
+
+def build_storage():
+    """
+    Для продакшну використовуємо тільки Redis FSM storage.
+    Без fallback на MemoryStorage.
+    """
+    if settings.fsm_storage != "redis":
+        raise RuntimeError(
+            "FSM_STORAGE must be set to 'redis' in production. "
+            "MemoryStorage is disabled in this build."
         )
 
-    logger.warning("Using MemoryStorage for FSM")
-    return MemoryStorage()
+    logger.info(
+        "Using Redis FSM storage: host=%s port=%s db=%s prefix=%s",
+        settings.redis_host,
+        settings.redis_port,
+        settings.redis_db,
+        settings.redis_prefix,
+    )
+    return RedisStorage2(
+        host=settings.redis_host,
+        port=settings.redis_port,
+        db=settings.redis_db,
+        password=settings.redis_password or None,
+        ssl=settings.redis_ssl,
+        pool_size=settings.redis_pool_size,
+        prefix=settings.redis_prefix,
+        state_ttl=settings.redis_state_ttl or None,
+        data_ttl=settings.redis_data_ttl or None,
+        bucket_ttl=settings.redis_bucket_ttl or None,
+    )
 
 
 async def safe_close_storage(dp: Dispatcher | None):
@@ -298,6 +337,9 @@ async def main():
         if not enable_polling:
             logger.warning("Polling disabled for this instance. Exiting without polling.")
             return
+
+        logger.info("Checking Redis availability before startup...")
+        await _ensure_redis_available()
 
         logger.info("Connecting to PostgreSQL for polling lock...")
         lock_conn = await asyncpg.connect(database_url)
