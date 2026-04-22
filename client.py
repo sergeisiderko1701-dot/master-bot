@@ -434,13 +434,9 @@ def register(dp):
 
         order_id = int(call.data.split("_")[-1])
 
-        order = await fetchrow(
-            "SELECT * FROM orders WHERE id=$1 AND user_id=$2",
-            order_id,
-            call.from_user.id,
-        )
+        order = await get_order_row(order_id)
 
-        if not order:
+        if not order or order["user_id"] != call.from_user.id:
             await call.answer("Вашу заявку не знайдено.", show_alert=True)
             return
 
@@ -502,18 +498,9 @@ def register(dp):
             order_id,
         )
 
-        order = await fetchrow(
-            """
-            SELECT *
-            FROM orders
-            WHERE id=$1
-              AND user_id=$2
-            """,
-            order_id,
-            call.from_user.id,
-        )
+        order = await get_order_row(order_id)
 
-        if not order:
+        if not order or order["user_id"] != call.from_user.id:
             await call.answer("Заявку не знайдено.", show_alert=True)
             return
 
