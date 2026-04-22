@@ -107,21 +107,21 @@ def register(dp):
         except Exception:
             return default
 
-    def _after_dialog_markup(role: str, order_id: int):
-        if role == "client":
-            return client_order_actions_inline(order_id, "matched")
-        return selected_order_master_actions(order_id)
+    async def _get_actual_client_markup(order_id: int):
+        order = await get_order_row(order_id)
+        actual_status = order["status"] if order else "matched"
+        return client_order_actions_inline(order_id, actual_status)
 
-    def _after_dialog_text(role: str, order_id: int) -> str:
+    async def _get_actual_master_markup(order_id: int):
+        order = await get_order_row(order_id)
+        if order and order["status"] in {"matched", "in_progress"}:
+            return selected_order_master_actions(order_id)
+        return main_menu_kb()
+
+    async def _after_dialog_markup(role: str, order_id: int):
         if role == "client":
-            return (
-                f"✅ <b>Повідомлення надіслано</b>\n\n"
-                f"Ви повернулись до заявки #{order_id}."
-            )
-        return (
-            f"✅ <b>Повідомлення надіслано</b>\n\n"
-            f"Ви повернулись до активної заявки #{order_id}."
-        )
+            return await _get_actual_client_markup(order_id)
+        return await _get_actual_master_markup(order_id)
 
     def build_client_contact_text(user: types.User, order_row) -> str:
         full_name = " ".join(
@@ -204,7 +204,11 @@ def register(dp):
         )
         await ChatFlow.message.set()
 
-        text = chat_open_text(order_id, is_client=is_client)
+        text = (
+            f"{chat_open_text(order_id, is_client=is_client)}\n\n"
+            "Ви можете надсилати кілька повідомлень підряд.\n"
+            "Щоб вийти — натисніть <b>❌ Закрити</b>."
+        )
 
         if isinstance(message_or_call, types.CallbackQuery):
             await message_or_call.message.answer(text, reply_markup=chat_reply_kb())
@@ -735,7 +739,7 @@ def register(dp):
         await message.answer(
             "✅ <b>Скаргу надіслано</b>\n\n"
             "Адміністратор розгляне її найближчим часом.",
-            reply_markup=_after_dialog_markup(return_role, order_id),
+            reply_markup=await _after_dialog_markup(return_role, order_id),
         )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("rate_"), state="*")
@@ -1000,12 +1004,39 @@ def register(dp):
             await message.answer(
                 "✋ <b>Режим написання закрито</b>\n\n"
                 f"Ви повернулись до заявки #{order_id}.",
-                reply_markup=_after_dialog_markup(role, order_id),
+                reply_markup=await _after_dialog_markup(role, order_id),
             )
             return
 
         await message.answer(
             "✋ <b>Режим написання закрито</b>",
+            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+        )
+
+    @dp.message_handler(lambda m: m.text in {"⬅️ Назад", "🏠 У меню"}, state=ChatFlow.message)
+    async def close_dialog_mode_navigation(message: types.Message, state: FSMContext):
+        data = await state.get_data()
+        role = data.get("chat_role")
+        order_id = data.get("order_id")
+        await state.finish()
+
+        if message.text == "🏠 У меню":
+            await message.answer(
+                "🏠 <b>Повернення в меню</b>",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
+
+        if role and order_id:
+            await message.answer(
+                "↩️ <b>Повернення із чату</b>\n\n"
+                f"Ви повернулись до заявки #{order_id}.",
+                reply_markup=await _after_dialog_markup(role, order_id),
+            )
+            return
+
+        await message.answer(
+            "↩️ <b>Повернення із чату</b>",
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
 
@@ -1032,7 +1063,23 @@ def register(dp):
             await state.finish()
             await message.answer(
                 "Цей діалог уже недоступний.",
-                reply_markup=_after_dialog_markup(role, order_id),
+                reply_markup=await _after_dialog_markup(role, order_id),
+            )
+            return
+
+        if role == "client" and chat["client_user_id"] != message.from_user.id:
+            await state.finish()
+            await message.answer(
+                "Цей діалог вам більше недоступний.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
+
+        if role == "master" and chat["master_user_id"] != message.from_user.id:
+            await state.finish()
+            await message.answer(
+                "Цей діалог вам більше недоступний.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
             )
             return
 
@@ -1057,10 +1104,10 @@ def register(dp):
                     caption=chat_media_caption(order_id, role, caption, "📷"),
                     reply_markup=exit_chat_inline(),
                 )
-                await state.finish()
                 await message.answer(
-                    _after_dialog_text(role, order_id),
-                    reply_markup=_after_dialog_markup(role, order_id),
+                    "✅ <b>Фото надіслано</b>\n\n"
+                    "Можете надіслати ще повідомлення або натиснути <b>❌ Закрити</b>.",
+                    reply_markup=chat_reply_kb(),
                 )
                 return
 
@@ -1081,10 +1128,10 @@ def register(dp):
                     caption=chat_media_caption(order_id, role, caption, "📹"),
                     reply_markup=exit_chat_inline(),
                 )
-                await state.finish()
                 await message.answer(
-                    _after_dialog_text(role, order_id),
-                    reply_markup=_after_dialog_markup(role, order_id),
+                    "✅ <b>Відео надіслано</b>\n\n"
+                    "Можете надіслати ще повідомлення або натиснути <b>❌ Закрити</b>.",
+                    reply_markup=chat_reply_kb(),
                 )
                 return
 
@@ -1110,10 +1157,10 @@ def register(dp):
                 chat_text_message(order_id, role, text),
                 reply_markup=exit_chat_inline(),
             )
-            await state.finish()
             await message.answer(
-                _after_dialog_text(role, order_id),
-                reply_markup=_after_dialog_markup(role, order_id),
+                "✅ <b>Повідомлення надіслано</b>\n\n"
+                "Можете надіслати ще повідомлення або натиснути <b>❌ Закрити</b>.",
+                reply_markup=chat_reply_kb(),
             )
 
         except Exception as e:
