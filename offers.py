@@ -27,16 +27,18 @@ from repositories import (
     get_chat_history,
     get_cooldown,
     get_order_row,
+    list_approved_masters_for_category,
     list_order_offers,
     master_active_offers_count,
     master_active_orders_count,
     rate_order,
+    reopen_order_by_client,
     refuse_order,
     set_cooldown,
     touch_master_presence,
 )
 from security import allow_callback_action, allow_message_action
-from services import send_chat_history
+from services import notify_masters_about_order, send_chat_history
 from states import ChatFlow, ComplaintWrite, OfferCreate, RatingFlow
 from ui_texts import (
     chat_media_caption,
@@ -470,6 +472,55 @@ def register(dp):
             await share_contacts_after_choose(call, order_id, offer_full)
 
         await call.answer("Пропозицію обрано")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("reopen_order_"), state="*")
+    async def reopen_order_handler(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="client_reopen_order",
+            limit=6,
+            window_seconds=120,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
+        order_id = int(call.data.split("_")[-1])
+
+        updated_order = await reopen_order_by_client(order_id, call.from_user.id)
+        if not updated_order:
+            await call.answer("Не вдалося повторно відкрити заявку.", show_alert=True)
+            return
+
+        await call.message.answer(
+            f"🔄 <b>Заявку #{order_id} повторно відкрито</b>\n\n"
+            "Попереднього майстра відключено від цієї заявки.",
+        )
+
+        active_offers = await list_order_offers(order_id)
+
+        if updated_order["status"] == "offered" and active_offers:
+            await call.message.answer(
+                "📬 У вас уже є інші доступні пропозиції. Можете одразу обрати іншого майстра.",
+                reply_markup=client_order_actions_inline(order_id, updated_order["status"]),
+            )
+        else:
+            try:
+                masters = await list_approved_masters_for_category(updated_order["category"])
+                await notify_masters_about_order(dp.bot, updated_order, masters)
+            except Exception as e:
+                logger.warning(
+                    "Не вдалося повторно розіслати заявку майстрам order_id=%s: %s",
+                    order_id,
+                    e,
+                )
+
+            await call.message.answer(
+                "📢 Заявку знову надіслано майстрам. Щойно хтось відгукнеться — ви побачите це в боті.",
+                reply_markup=client_order_actions_inline(order_id, updated_order["status"]),
+            )
+
+        await call.answer("Готово")
 
     @dp.callback_query_handler(lambda c: c.data.startswith("finish_order_"), state="*")
     async def finish_order_handler(call: types.CallbackQuery, state: FSMContext):
