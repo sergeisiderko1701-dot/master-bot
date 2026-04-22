@@ -42,9 +42,21 @@ def back_menu_kb():
 
 def categories_kb():
     kb = _reply_kb()
-    for label, _ in CATEGORIES:
-        kb.add(KeyboardButton(label))
-    kb.add(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
+
+    row = []
+    for i, (label, _) in enumerate(CATEGORIES, start=1):
+        row.append(KeyboardButton(label))
+        if i % 2 == 0:
+            kb.row(*row)
+            row = []
+
+    if row:
+        kb.row(*row)
+
+    kb.row(
+        KeyboardButton("⬅️ Назад"),
+        KeyboardButton("🏠 У меню"),
+    )
     return kb
 
 
@@ -98,11 +110,20 @@ def help_role_inline_kb():
 
 def master_categories_inline_kb(selected_values=None, done_callback: str = "master_cat_done"):
     selected_values = set(selected_values or [])
-    kb = _inline_kb(row_width=1)
+    kb = _inline_kb(row_width=2)
 
+    buttons = []
     for label, value in CATEGORIES:
         prefix = "✅ " if value in selected_values else ""
-        kb.add(InlineKeyboardButton(f"{prefix}{label}", callback_data=f"master_cat_toggle_{value}"))
+        buttons.append(
+            InlineKeyboardButton(
+                f"{prefix}{label}",
+                callback_data=f"master_cat_toggle_{value}",
+            )
+        )
+
+    for i in range(0, len(buttons), 2):
+        kb.row(*buttons[i:i + 2])
 
     kb.add(InlineKeyboardButton("✅ Готово", callback_data=done_callback))
     return kb
