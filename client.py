@@ -265,6 +265,13 @@ def register(dp):
             )
             return
 
+        if message.contact.user_id != message.from_user.id:
+            await message.answer(
+                "Будь ласка, надішліть саме <b>свій</b> номер кнопкою <b>📲 Поділитися номером</b>.",
+                reply_markup=request_contact_kb(),
+            )
+            return
+
         phone = normalize_phone(message.contact.phone_number)
 
         if not is_valid_phone(phone):
