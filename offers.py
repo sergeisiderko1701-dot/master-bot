@@ -28,6 +28,7 @@ from repositories import (
     get_cooldown,
     get_order_row,
     list_order_offers,
+    master_active_offers_count,
     master_active_orders_count,
     rate_order,
     refuse_order,
@@ -241,6 +242,14 @@ def register(dp):
             await call.answer("У вас уже максимум активних заявок.", show_alert=True)
             return
 
+        if await master_active_offers_count(call.from_user.id) >= settings.max_active_master_offers:
+            await call.answer(
+                f"У вас уже максимум активних відгуків ({settings.max_active_master_offers}). "
+                f"Дочекайтесь вибору клієнта або закриття частини заявок.",
+                show_alert=True,
+            )
+            return
+
         last_offer_at = await get_cooldown(call.from_user.id, "master_create_offer")
         current_ts = now_ts()
         if current_ts - last_offer_at < settings.master_offer_cooldown:
@@ -387,6 +396,15 @@ def register(dp):
             )
             return
 
+        if await master_active_offers_count(message.from_user.id) >= settings.max_active_master_offers:
+            await state.finish()
+            await message.answer(
+                f"У вас уже максимум активних відгуків ({settings.max_active_master_offers}). "
+                f"Дочекайтесь вибору клієнта або закриття частини заявок.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
+
         comment = None if text.lower() in SKIP_WORDS else normalize_text(message.text, 1000)
         comment = comment or "Без коментаря"
 
@@ -401,7 +419,7 @@ def register(dp):
         if not offer_id:
             await state.finish()
             await message.answer(
-                "Не вдалося створити пропозицію. Можливо, заявка вже неактуальна або ви вже відгукувались.",
+                "Не вдалося створити пропозицію. Можливо, заявка вже неактуальна, ви вже відгукувались або досягли ліміту активних відгуків.",
                 reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
             )
             return
