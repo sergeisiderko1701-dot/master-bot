@@ -27,6 +27,7 @@ from repositories import (
     get_chat_history,
     get_cooldown,
     get_order_row,
+    list_order_offers,
     master_active_orders_count,
     rate_order,
     refuse_order,
@@ -537,14 +538,37 @@ def register(dp):
         )
 
         try:
+            updated_order = await get_order_row(order_id)
+            active_offers = await list_order_offers(order_id)
+
+            if updated_order and updated_order["status"] == "offered":
+                client_text = (
+                    f"❌ <b>Майстер відмовився від заявки #{order_id}</b>\n\n"
+                    "Заявка все ще активна.\n"
+                    "Ви можете обрати іншого майстра з наявних пропозицій."
+                )
+                client_markup = client_order_actions_inline(order_id, updated_order["status"])
+            else:
+                client_text = (
+                    f"❌ <b>Майстер відмовився від заявки #{order_id}</b>\n\n"
+                    "Заявка знову відкрита для нових пропозицій майстрів.\n"
+                    "Щойно хтось відгукнеться — ви побачите це в боті."
+                )
+                actual_status = updated_order["status"] if updated_order else "new"
+                client_markup = client_order_actions_inline(order_id, actual_status)
+
             await dp.bot.send_message(
                 order["user_id"],
-                (
-                    f"❌ <b>Майстер відмовився від заявки #{order_id}</b>\n\n"
-                    "Заявка знову відкрита для нових пропозицій."
-                ),
-                reply_markup=client_order_actions_inline(order_id, "offered"),
+                client_text,
+                reply_markup=client_markup,
             )
+
+            if active_offers:
+                await dp.bot.send_message(
+                    order["user_id"],
+                    f"📬 <b>Доступних пропозицій зараз:</b> {len(active_offers)}",
+                )
+
         except Exception as e:
             logger.warning("Не вдалося повідомити клієнта про відмову по заявці %s: %s", order_id, e)
 
