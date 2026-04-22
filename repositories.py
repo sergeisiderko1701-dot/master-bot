@@ -412,14 +412,66 @@ async def refuse_order(order_id: int):
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            order = await conn.fetchrow(
+                """
+                SELECT *
+                FROM orders
+                WHERE id=$1
+                FOR UPDATE
+                """,
+                order_id,
+            )
+            if not order:
+                return
+
+            selected_master_id = order["selected_master_id"]
+
+            if selected_master_id is not None:
+                await conn.execute(
+                    """
+                    UPDATE offers
+                    SET status='rejected'
+                    WHERE order_id=$1
+                      AND master_user_id=$2
+                      AND status='chosen'
+                    """,
+                    order_id,
+                    selected_master_id,
+                )
+
+            await conn.execute(
+                """
+                UPDATE offers
+                SET status='active'
+                WHERE order_id=$1
+                  AND status='rejected'
+                  AND ($2 IS NULL OR master_user_id <> $2)
+                """,
+                order_id,
+                selected_master_id,
+            )
+
+            active_offers_count = await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM offers
+                WHERE order_id=$1
+                  AND status='active'
+                """,
+                order_id,
+            )
+
+            new_status = "offered" if int(active_offers_count or 0) > 0 else "new"
+
             await conn.execute(
                 """
                 UPDATE orders
                 SET selected_master_id=NULL,
-                    status='offered',
-                    updated_at=$1
-                WHERE id=$2
+                    status=$1,
+                    updated_at=$2
+                WHERE id=$3
                 """,
+                new_status,
                 now_ts(),
                 order_id,
             )
