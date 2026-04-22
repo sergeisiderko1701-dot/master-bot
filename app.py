@@ -37,8 +37,11 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
-
 logger = logging.getLogger(__name__)
+
+
+class DuplicatePollingDetected(RuntimeError):
+    pass
 
 
 def make_lock_key(token: str) -> int:
@@ -100,12 +103,7 @@ def register_error_handlers(dp: Dispatcher) -> None:
         return True
 
 
-async def _ensure_redis_available() -> None:
-    """
-    Жорстка перевірка Redis на старті.
-    Якщо Redis недоступний — краще не запускати бота взагалі,
-    ніж втрачати FSM-стани посеред сценаріїв.
-    """
+async def ensure_redis_available() -> None:
     from redis.asyncio import Redis
 
     redis = Redis(
@@ -128,21 +126,14 @@ async def _ensure_redis_available() -> None:
             settings.redis_db,
         )
     finally:
-        try:
-            await redis.close()
-        except Exception:
-            logger.exception("Failed to close Redis startup check client")
+        with suppress(Exception):
+            await redis.aclose()
 
 
 def build_storage():
-    """
-    Для продакшну використовуємо тільки Redis FSM storage.
-    Без fallback на MemoryStorage.
-    """
     if settings.fsm_storage != "redis":
         raise RuntimeError(
-            "FSM_STORAGE must be set to 'redis' in production. "
-            "MemoryStorage is disabled in this build."
+            "FSM_STORAGE must be set to 'redis'. MemoryStorage is disabled in this build."
         )
 
     logger.info(
@@ -152,6 +143,7 @@ def build_storage():
         settings.redis_db,
         settings.redis_prefix,
     )
+
     return RedisStorage2(
         host=settings.redis_host,
         port=settings.redis_port,
@@ -169,7 +161,6 @@ def build_storage():
 async def safe_close_storage(dp: Dispatcher | None):
     if not dp or not dp.storage:
         return
-
     try:
         await dp.storage.close()
         await dp.storage.wait_closed()
@@ -181,7 +172,6 @@ async def safe_close_storage(dp: Dispatcher | None):
 async def safe_close_bot_session(bot: Bot | None):
     if not bot:
         return
-
     try:
         session = await bot.get_session()
         await session.close()
@@ -190,15 +180,13 @@ async def safe_close_bot_session(bot: Bot | None):
         logger.exception("Failed to close bot session")
 
 
-async def safe_release_lock(lock_conn, lock_key):
-    if not lock_conn:
+async def safe_release_lock(lock_conn: asyncpg.Connection | None, lock_key: int | None):
+    if not lock_conn or lock_key is None:
         return
-
     try:
         if lock_conn.is_closed():
             logger.warning("Lock connection already closed before unlock")
             return
-
         unlocked = await lock_conn.fetchval(
             "SELECT pg_advisory_unlock($1)",
             lock_key,
@@ -208,10 +196,9 @@ async def safe_release_lock(lock_conn, lock_key):
         logger.exception("Failed to release advisory lock")
 
 
-async def safe_close_lock_conn(lock_conn):
+async def safe_close_lock_conn(lock_conn: asyncpg.Connection | None):
     if not lock_conn:
         return
-
     try:
         if not lock_conn.is_closed():
             await lock_conn.close()
@@ -220,34 +207,34 @@ async def safe_close_lock_conn(lock_conn):
         logger.exception("Failed to close lock connection")
 
 
+async def acquire_polling_lock(database_url: str, lock_key: int) -> asyncpg.Connection:
+    logger.info("Connecting to PostgreSQL for polling lock...")
+    conn = await asyncpg.connect(database_url)
+
+    pg_backend_pid = await conn.fetchval("SELECT pg_backend_pid()")
+    logger.info("PostgreSQL backend pid for lock connection: %s", pg_backend_pid)
+
+    locked = await conn.fetchval("SELECT pg_try_advisory_lock($1)", lock_key)
+    if not locked:
+        await conn.close()
+        raise DuplicatePollingDetected("Polling lock is already held by another instance")
+
+    logger.info("Polling lock acquired successfully")
+    return conn
+
+
 async def hard_fail_on_duplicate_polling(bot: Bot):
-    """
-    Preflight check:
-    - прибирає webhook
-    - робить короткий get_updates
-    Якщо вже є інший long polling, Telegram може одразу дати ConflictError.
-    """
     logger.info("Deleting webhook without dropping pending updates...")
     await bot.delete_webhook(drop_pending_updates=False)
 
     try:
         await bot.get_updates(timeout=1, limit=1)
-    except TerminatedByOtherGetUpdates:
-        logger.error("Duplicate polling detected during preflight")
-        raise SystemExit(1)
-    except ConflictError:
-        logger.error("ConflictError during preflight get_updates")
-        raise SystemExit(1)
+    except (TerminatedByOtherGetUpdates, ConflictError) as e:
+        raise DuplicatePollingDetected(f"Duplicate polling detected during preflight: {e}") from e
 
 
 async def run_polling_loop(bot: Bot, dp: Dispatcher, shutdown_event: asyncio.Event):
-    """
-    Власний polling loop:
-    - без циклу нескінченних retry після TerminatedByOtherGetUpdates
-    - при duplicate polling одразу завершується
-    """
     logger.info("Start polling.")
-
     offset = None
 
     while not shutdown_event.is_set():
@@ -264,17 +251,12 @@ async def run_polling_loop(bot: Bot, dp: Dispatcher, shutdown_event: asyncio.Eve
             offset = updates[-1].update_id + 1
             await dp.process_updates(updates, fast=True)
 
-        except TerminatedByOtherGetUpdates:
+        except (TerminatedByOtherGetUpdates, ConflictError) as e:
             logger.exception(
-                "Telegram reported conflict: another active polling instance exists. Exiting."
+                "Telegram reported polling conflict: another active instance exists."
             )
-            raise SystemExit(1)
-
-        except ConflictError:
-            logger.exception(
-                "Telegram reported polling conflict (ConflictError). Exiting."
-            )
-            raise SystemExit(1)
+            shutdown_event.set()
+            raise DuplicatePollingDetected(str(e)) from e
 
         except RetryAfter as e:
             logger.warning("RetryAfter from Telegram: sleep %s sec", e.timeout)
@@ -302,7 +284,6 @@ async def main():
     shutdown_wait_task = None
     monitoring_task = None
     lock_key = None
-    pg_backend_pid = None
 
     shutdown_event = asyncio.Event()
 
@@ -315,13 +296,12 @@ async def main():
 
         token = (settings.bot_token or "").strip()
         database_url = (settings.database_url or "").strip()
+        enable_polling = os.getenv("ENABLE_POLLING", "true").lower() == "true"
 
         if not token:
             raise ValueError("BOT_TOKEN is empty")
         if not database_url:
             raise ValueError("DATABASE_URL is empty")
-
-        enable_polling = os.getenv("ENABLE_POLLING", "true").lower() == "true"
 
         fingerprint = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
         lock_key = make_lock_key(token)
@@ -339,28 +319,9 @@ async def main():
             return
 
         logger.info("Checking Redis availability before startup...")
-        await _ensure_redis_available()
+        await ensure_redis_available()
 
-        logger.info("Connecting to PostgreSQL for polling lock...")
-        lock_conn = await asyncpg.connect(database_url)
-
-        pg_backend_pid = await lock_conn.fetchval("SELECT pg_backend_pid()")
-        logger.info("PostgreSQL backend pid for lock connection: %s", pg_backend_pid)
-
-        locked = await lock_conn.fetchval(
-            "SELECT pg_try_advisory_lock($1)",
-            lock_key,
-        )
-
-        if not locked:
-            logger.error(
-                "Polling lock is already held by another instance. Exiting. PID=%s HOST=%s",
-                os.getpid(),
-                socket.gethostname(),
-            )
-            raise SystemExit(1)
-
-        logger.info("Polling lock acquired successfully")
+        lock_conn = await acquire_polling_lock(database_url, lock_key)
 
         logger.info("Initializing database...")
         await init_db(database_url)
@@ -392,6 +353,7 @@ async def main():
             with suppress(NotImplementedError):
                 loop.add_signal_handler(sig, request_shutdown, sig.name)
 
+        pg_backend_pid = await lock_conn.fetchval("SELECT pg_backend_pid()")
         logger.info(
             "Starting polling. PID=%s HOST=%s PG_PID=%s",
             os.getpid(),
@@ -399,45 +361,37 @@ async def main():
             pg_backend_pid,
         )
 
-        polling_task = asyncio.create_task(run_polling_loop(bot, dp, shutdown_event))
-        shutdown_wait_task = asyncio.create_task(shutdown_event.wait())
-        monitoring_task = asyncio.create_task(stale_orders_watcher(bot, shutdown_event))
+        polling_task = asyncio.create_task(run_polling_loop(bot, dp, shutdown_event), name="polling_task")
+        monitoring_task = asyncio.create_task(stale_orders_watcher(bot, shutdown_event), name="monitoring_task")
+        shutdown_wait_task = asyncio.create_task(shutdown_event.wait(), name="shutdown_wait_task")
 
         done, pending = await asyncio.wait(
-            {polling_task, shutdown_wait_task, monitoring_task},
+            {polling_task, monitoring_task, shutdown_wait_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
 
-        for task in pending:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+        for task in done:
+            if task is shutdown_wait_task:
+                continue
+            exc = task.exception()
+            if exc:
+                raise exc
 
         if shutdown_event.is_set():
             logger.warning("Shutdown requested. Stopping tasks...")
 
-            if polling_task and not polling_task.done():
-                polling_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await polling_task
+        for task in pending:
+            task.cancel()
 
-            if monitoring_task and not monitoring_task.done():
-                monitoring_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await monitoring_task
+        for task in pending:
+            with suppress(asyncio.CancelledError):
+                await task
 
-            logger.warning("Background tasks stopped.")
+        logger.warning("Background tasks stopped.")
 
-        else:
-            if polling_task in done:
-                exc = polling_task.exception()
-                if exc:
-                    raise exc
-
-            if monitoring_task in done:
-                exc = monitoring_task.exception()
-                if exc:
-                    raise exc
+    except DuplicatePollingDetected as e:
+        logger.error("Duplicate polling protection triggered: %s", e)
+        raise SystemExit(1)
 
     except SystemExit:
         raise
@@ -457,20 +411,11 @@ async def main():
     finally:
         logger.info("Shutting down bot...")
 
-        if shutdown_wait_task and not shutdown_wait_task.done():
-            shutdown_wait_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await shutdown_wait_task
-
-        if monitoring_task and not monitoring_task.done():
-            monitoring_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await monitoring_task
-
-        if polling_task and not polling_task.done():
-            polling_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await polling_task
+        for task in (shutdown_wait_task, monitoring_task, polling_task):
+            if task and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
 
         await safe_close_storage(dp)
         await safe_close_bot_session(bot)
