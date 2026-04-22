@@ -4,6 +4,7 @@ import logging
 from config import settings
 from keyboards import (
     admin_order_actions_inline,
+    client_order_actions_inline,
     finish_reminder_inline,
     order_card_master_actions,
 )
@@ -18,11 +19,8 @@ STALE_ORDERS_CHECK_INTERVAL_SECONDS = 180
 
 MASTER_REMINDER_AFTER_SECONDS = 5 * 60
 ADMIN_NO_OFFER_ALERT_AFTER_SECONDS = 30 * 60
+CLIENT_OFFER_REMINDER_AFTER_SECONDS = 15 * 60
 CLIENT_FINISH_REMINDER_AFTER_SECONDS = 24 * 60 * 60
-
-# НОВЕ:
-# якщо 24 години немає жодного оффера — автоматично закриваємо як expired
-AUTO_EXPIRE_NO_OFFERS_AFTER_SECONDS = 24 * 60 * 60
 
 BATCH_LIMIT = 20
 
@@ -73,6 +71,31 @@ async def _get_orders_without_offers_for_admin_alert(limit: int):
     )
 
 
+async def _get_orders_for_client_offer_reminder(limit: int):
+    threshold_ts = now_ts() - CLIENT_OFFER_REMINDER_AFTER_SECONDS
+
+    return await fetch(
+        """
+        SELECT o.*
+        FROM orders o
+        WHERE o.status='offered'
+          AND o.selected_master_id IS NULL
+          AND COALESCE(o.updated_at, o.created_at, 0) <= $1
+          AND o.client_offer_reminder_sent_at IS NULL
+          AND EXISTS (
+              SELECT 1
+              FROM offers f
+              WHERE f.order_id = o.id
+                AND f.status='active'
+          )
+        ORDER BY COALESCE(o.updated_at, o.created_at) ASC
+        LIMIT $2
+        """,
+        threshold_ts,
+        limit,
+    )
+
+
 async def _get_orders_for_client_finish_reminder(limit: int):
     threshold_ts = now_ts() - CLIENT_FINISH_REMINDER_AFTER_SECONDS
 
@@ -84,29 +107,6 @@ async def _get_orders_for_client_finish_reminder(limit: int):
           AND COALESCE(o.updated_at, o.created_at, 0) <= $1
           AND o.client_finish_reminder_sent_at IS NULL
         ORDER BY COALESCE(o.updated_at, o.created_at) ASC
-        LIMIT $2
-        """,
-        threshold_ts,
-        limit,
-    )
-
-
-# НОВЕ:
-async def _get_orders_for_auto_expire_no_offers(limit: int):
-    threshold_ts = now_ts() - AUTO_EXPIRE_NO_OFFERS_AFTER_SECONDS
-
-    return await fetch(
-        """
-        SELECT o.*
-        FROM orders o
-        WHERE o.status='new'
-          AND COALESCE(o.created_at, 0) <= $1
-          AND NOT EXISTS (
-              SELECT 1
-              FROM offers f
-              WHERE f.order_id = o.id
-          )
-        ORDER BY o.created_at ASC
         LIMIT $2
         """,
         threshold_ts,
@@ -152,6 +152,19 @@ async def _mark_admin_no_offer_alert_sent(order_id: int):
     )
 
 
+async def _mark_client_offer_reminder_sent(order_id: int):
+    await execute(
+        """
+        UPDATE orders
+        SET client_offer_reminder_sent_at=$1
+        WHERE id=$2
+          AND client_offer_reminder_sent_at IS NULL
+        """,
+        now_ts(),
+        order_id,
+    )
+
+
 async def _mark_client_finish_reminder_sent(order_id: int):
     await execute(
         """
@@ -159,26 +172,6 @@ async def _mark_client_finish_reminder_sent(order_id: int):
         SET client_finish_reminder_sent_at=$1
         WHERE id=$2
           AND client_finish_reminder_sent_at IS NULL
-        """,
-        now_ts(),
-        order_id,
-    )
-
-
-# НОВЕ:
-async def _expire_order_without_offers(order_id: int):
-    await execute(
-        """
-        UPDATE orders
-        SET status='expired',
-            updated_at=$1
-        WHERE id=$2
-          AND status='new'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM offers f
-              WHERE f.order_id = orders.id
-          )
         """,
         now_ts(),
         order_id,
@@ -240,6 +233,21 @@ async def notify_masters_about_stale_order(bot, order_row):
     )
 
 
+async def notify_masters_about_stale_orders(bot):
+    rows = await _get_orders_for_master_reminder(BATCH_LIMIT)
+    if not rows:
+        return
+
+    for row in rows:
+        try:
+            await notify_masters_about_stale_order(bot, row)
+        except Exception:
+            logger.exception(
+                "Failed to process master reminder for order_id=%s",
+                row["id"],
+            )
+
+
 async def notify_admin_about_stale_orders(bot):
     if settings.admin_id <= 0:
         return
@@ -286,6 +294,56 @@ async def notify_admin_about_stale_orders(bot):
             )
 
 
+async def notify_clients_about_offer_reminder(bot):
+    rows = await _get_orders_for_client_offer_reminder(BATCH_LIMIT)
+    if not rows:
+        return
+
+    for row in rows:
+        order_id = int(row["id"])
+        user_id = row["user_id"]
+
+        try:
+            active_offers_count_row = await fetch(
+                """
+                SELECT id
+                FROM offers
+                WHERE order_id=$1
+                  AND status='active'
+                ORDER BY created_at ASC
+                LIMIT 100
+                """,
+                order_id,
+            )
+            offers_count = len(active_offers_count_row)
+
+            await bot.send_message(
+                user_id,
+                (
+                    f"📬 <b>По заявці #{order_id} вже є пропозиції майстрів</b>\n\n"
+                    f"Доступних пропозицій: <b>{offers_count}</b>\n\n"
+                    "Оберіть майстра, щоб отримати контакти і домовитись про роботу."
+                ),
+                reply_markup=client_order_actions_inline(order_id, "offered"),
+            )
+
+            await _mark_client_offer_reminder_sent(order_id)
+
+            logger.info(
+                "Client offer reminder sent for order_id=%s user_id=%s offers=%s",
+                order_id,
+                user_id,
+                offers_count,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to send client offer reminder for order_id=%s user_id=%s: %s",
+                order_id,
+                user_id,
+                e,
+            )
+
+
 async def notify_clients_about_finish_reminder(bot):
     rows = await _get_orders_for_client_finish_reminder(BATCH_LIMIT)
     if not rows:
@@ -322,74 +380,22 @@ async def notify_clients_about_finish_reminder(bot):
             )
 
 
-# НОВЕ:
-async def auto_expire_orders_without_offers(bot):
-    rows = await _get_orders_for_auto_expire_no_offers(BATCH_LIMIT)
-    if not rows:
-        return
-
-    for row in rows:
-        order_id = int(row["id"])
-        user_id = row["user_id"]
-
-        try:
-            await _expire_order_without_offers(order_id)
-
-            await bot.send_message(
-                user_id,
-                (
-                    f"⌛ <b>Заявку #{order_id} автоматично закрито</b>\n\n"
-                    "На жаль, за тривалий час по ній не надійшло жодної пропозиції від майстрів.\n\n"
-                    "Ви можете створити нову заявку пізніше або уточнити опис проблеми, "
-                    "щоб отримати більше шансів на відгук."
-                ),
-            )
-
-            logger.info(
-                "Auto-expired order without offers: order_id=%s user_id=%s",
-                order_id,
-                user_id,
-            )
-        except Exception as e:
-            logger.warning(
-                "Failed to auto-expire order without offers order_id=%s user_id=%s: %s",
-                order_id,
-                user_id,
-                e,
-            )
-
-
-async def notify_masters_about_stale_orders(bot):
-    rows = await _get_orders_for_master_reminder(BATCH_LIMIT)
-    if not rows:
-        return
-
-    for row in rows:
-        try:
-            await notify_masters_about_stale_order(bot, row)
-        except Exception:
-            logger.exception(
-                "Failed to process master reminder for order_id=%s",
-                row["id"],
-            )
-
-
 async def stale_orders_watcher(bot, shutdown_event: asyncio.Event):
     logger.info(
-        "Stale orders watcher started: every %s sec, master reminder=%s sec, admin alert=%s sec, client finish reminder=%s sec, auto expire no offers=%s sec",
+        "Stale orders watcher started: every %s sec, master reminder=%s sec, admin alert=%s sec, client offer reminder=%s sec, client finish reminder=%s sec",
         STALE_ORDERS_CHECK_INTERVAL_SECONDS,
         MASTER_REMINDER_AFTER_SECONDS,
         ADMIN_NO_OFFER_ALERT_AFTER_SECONDS,
+        CLIENT_OFFER_REMINDER_AFTER_SECONDS,
         CLIENT_FINISH_REMINDER_AFTER_SECONDS,
-        AUTO_EXPIRE_NO_OFFERS_AFTER_SECONDS,
     )
 
     while not shutdown_event.is_set():
         try:
             await notify_masters_about_stale_orders(bot)
             await notify_admin_about_stale_orders(bot)
+            await notify_clients_about_offer_reminder(bot)
             await notify_clients_about_finish_reminder(bot)
-            await auto_expire_orders_without_offers(bot)
         except Exception:
             logger.exception("Stale orders watcher iteration failed")
 
