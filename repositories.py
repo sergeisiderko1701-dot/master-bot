@@ -492,6 +492,89 @@ async def refuse_order(order_id: int):
             )
 
 
+async def reopen_order_by_client(order_id: int, client_user_id: int):
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            order = await conn.fetchrow(
+                """
+                SELECT *
+                FROM orders
+                WHERE id=$1
+                  AND user_id=$2
+                  AND status = ANY($3::text[])
+                  AND selected_master_id IS NOT NULL
+                FOR UPDATE
+                """,
+                order_id,
+                client_user_id,
+                ["matched", "in_progress"],
+            )
+            if not order:
+                return None
+
+            selected_master_id = order["selected_master_id"]
+
+            await conn.execute(
+                """
+                UPDATE offers
+                SET status='rejected'
+                WHERE order_id=$1
+                  AND master_user_id=$2
+                  AND status='chosen'
+                """,
+                order_id,
+                selected_master_id,
+            )
+
+            await conn.execute(
+                """
+                UPDATE offers
+                SET status='active'
+                WHERE order_id=$1
+                  AND status='rejected'
+                  AND master_user_id <> $2
+                """,
+                order_id,
+                selected_master_id,
+            )
+
+            active_offers_count = await conn.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM offers
+                WHERE order_id=$1
+                  AND status='active'
+                """,
+                order_id,
+            )
+
+            new_status = "offered" if int(active_offers_count or 0) > 0 else "new"
+
+            await conn.execute(
+                """
+                UPDATE orders
+                SET selected_master_id=NULL,
+                    status=$1,
+                    updated_at=$2
+                WHERE id=$3
+                """,
+                new_status,
+                now_ts(),
+                order_id,
+            )
+
+            await conn.execute(
+                "UPDATE chats SET status='closed' WHERE order_id=$1",
+                order_id,
+            )
+
+            return await conn.fetchrow(
+                "SELECT * FROM orders WHERE id=$1",
+                order_id,
+            )
+
+
 async def finish_order(order_id: int):
     pool = get_pool()
     async with pool.acquire() as conn:
