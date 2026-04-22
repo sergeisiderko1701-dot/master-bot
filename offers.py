@@ -10,6 +10,7 @@ from keyboards import (
     chat_reply_kb,
     client_order_actions_inline,
     exit_chat_inline,
+    offer_select_inline,
     rating_inline,
     selected_order_master_actions,
 )
@@ -23,6 +24,7 @@ from repositories import (
     finish_order,
     get_chat_for_order,
     get_chat_history,
+    get_cooldown,
     get_order_row,
     master_active_orders_count,
     rate_order,
@@ -93,6 +95,7 @@ def register(dp):
         await dp.bot.send_message(
             client_user_id,
             offer_card_text(offer),
+            reply_markup=offer_select_inline(offer_id),
         )
 
     def _safe_val(row, key, default=None):
