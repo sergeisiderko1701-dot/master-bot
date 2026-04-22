@@ -36,6 +36,7 @@ class Settings:
     online_timeout: int = _to_int(os.getenv("ONLINE_TIMEOUT"), 300)
 
     max_active_master_orders: int = _to_int(os.getenv("MAX_ACTIVE_MASTER_ORDERS"), 3)
+    max_active_master_offers: int = _to_int(os.getenv("MAX_ACTIVE_MASTER_OFFERS"), 10)
     master_offer_cooldown: int = _to_int(os.getenv("MASTER_OFFER_COOLDOWN"), 60)
 
     app_instance_name: str = os.getenv("APP_INSTANCE_NAME", "unknown-instance").strip()
@@ -83,6 +84,9 @@ class Settings:
 
         if self.max_active_master_orders <= 0:
             raise ValueError("MAX_ACTIVE_MASTER_ORDERS must be > 0")
+
+        if self.max_active_master_offers <= 0:
+            raise ValueError("MAX_ACTIVE_MASTER_OFFERS must be > 0")
 
         if self.online_timeout < 0:
             raise ValueError("ONLINE_TIMEOUT must be >= 0")
