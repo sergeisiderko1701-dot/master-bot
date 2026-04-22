@@ -21,8 +21,6 @@ async def _run_with_retry(method_name: str, query: str, *args):
             return await method(query, *args)
 
     except asyncpg.InvalidCachedStatementError:
-        # Після зміни схеми БД asyncpg може тримати старі cached plans.
-        # Повністю пересоздаємо pool і повторюємо запит.
         await reset_db_pool(settings.database_url)
 
         pool = get_pool()
@@ -177,6 +175,19 @@ async def master_active_orders_count(master_user_id: int) -> int:
         """,
         master_user_id,
         ["matched", "in_progress"],
+    )
+    return int(value or 0)
+
+
+async def master_active_offers_count(master_user_id: int) -> int:
+    value = await fetchval(
+        """
+        SELECT COUNT(*)
+        FROM offers
+        WHERE master_user_id=$1
+          AND status='active'
+        """,
+        master_user_id,
     )
     return int(value or 0)
 
