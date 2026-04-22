@@ -27,6 +27,7 @@ def _inline_kb(row_width: int = 1) -> InlineKeyboardMarkup:
 def main_menu_kb(is_admin_user: bool = False):
     kb = _reply_kb()
     kb.add(KeyboardButton("👤 Клієнт"), KeyboardButton("🔧 Майстер"))
+    kb.add(KeyboardButton("ℹ️ Як користуватись"))
     kb.add(KeyboardButton("🆘 Допомога"))
     if is_admin_user:
         kb.add(KeyboardButton("👑 Адмін"))
@@ -85,6 +86,13 @@ def admin_orders_filter_kb():
     kb.add(KeyboardButton("✅ Завершені"), KeyboardButton("❌ Скасовані"))
     kb.add(KeyboardButton("⌛ Прострочені"))
     kb.add(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
+    return kb
+
+
+def help_role_inline_kb():
+    kb = _inline_kb(row_width=1)
+    kb.add(InlineKeyboardButton("👤 Для клієнта", callback_data="help_client"))
+    kb.add(InlineKeyboardButton("🔧 Для майстра", callback_data="help_master"))
     return kb
 
 
