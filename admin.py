@@ -978,11 +978,10 @@ def register(dp):
             await call.answer()
             return
 
-        parts = call.data.split("_")
-        page = int(parts[-1])
-        status_filter = parts[2] if len(parts) == 4 else None
-        if status_filter == "all":
-            status_filter = None
+        raw = call.data
+        page = int(raw.rsplit("_", 1)[1])
+        status_part = raw[len("admin_orders_"):].rsplit("_", 1)[0]
+        status_filter = None if status_part == "all" else status_part
 
         await _show_admin_orders(call.message.chat.id, page, dp.bot, status_filter)
         await call.answer()
