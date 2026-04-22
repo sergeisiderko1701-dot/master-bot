@@ -4,7 +4,6 @@ import logging
 import os
 import signal
 import socket
-import traceback
 from contextlib import suppress
 
 import asyncpg
@@ -14,12 +13,13 @@ from aiogram.contrib.fsm_storage.redis import RedisStorage2
 from aiogram.utils.exceptions import (
     BotBlocked,
     ChatNotFound,
+    ConflictError,
     InvalidQueryID,
     MessageCantBeDeleted,
     MessageNotModified,
     RetryAfter,
-    TerminatedByOtherGetUpdates,
     TelegramAPIError,
+    TerminatedByOtherGetUpdates,
     UserDeactivated,
 )
 
@@ -59,18 +59,8 @@ def register_handlers(dp: Dispatcher) -> None:
 def register_error_handlers(dp: Dispatcher) -> None:
     @dp.errors_handler()
     async def global_error_handler(update, error):
-        update_repr = repr(update)
-        error_trace = "".join(
-            traceback.format_exception(type(error), error, error.__traceback__)
-        )
+        logger.exception("UNHANDLED ERROR | update=%r", update)
 
-        logger.exception(
-            "UNHANDLED ERROR | update=%s\n%s",
-            update_repr,
-            error_trace,
-        )
-
-        # Тихі Telegram-помилки, які не треба показувати користувачу як критичні
         if isinstance(
             error,
             (
@@ -88,39 +78,25 @@ def register_error_handlers(dp: Dispatcher) -> None:
             logger.warning("Telegram flood control: retry after %s sec", error.timeout)
             return True
 
-        if isinstance(error, TelegramAPIError):
-            logger.warning("Telegram API error: %s", error)
-        else:
-            logger.error("Unexpected error type: %s", type(error).__name__)
-
-        # Показуємо користувачу нормальне повідомлення
         try:
             if isinstance(update, types.Update):
                 if update.callback_query:
-                    try:
+                    with suppress(Exception):
                         await update.callback_query.answer(
                             "⚠️ Сталася технічна помилка. Спробуйте ще раз.",
                             show_alert=True,
                         )
-                    except Exception:
-                        pass
-
-                    try:
+                    with suppress(Exception):
                         await update.callback_query.message.answer(
                             "⚠️ Сталася технічна помилка. Спробуйте ще раз через кілька секунд."
                         )
-                    except Exception:
-                        pass
-
                 elif update.message:
-                    try:
+                    with suppress(Exception):
                         await update.message.answer(
                             "⚠️ Сталася технічна помилка. Спробуйте ще раз через кілька секунд."
                         )
-                    except Exception:
-                        pass
         except Exception:
-            logger.exception("Failed to send error message to user")
+            logger.exception("Failed to notify user about error")
 
         return True
 
@@ -184,10 +160,6 @@ async def safe_release_lock(lock_conn, lock_key):
             logger.warning("Lock connection already closed before unlock")
             return
 
-        if lock_key is None:
-            logger.warning("Lock key is missing, unlock skipped")
-            return
-
         unlocked = await lock_conn.fetchval(
             "SELECT pg_advisory_unlock($1)",
             lock_key,
@@ -209,6 +181,80 @@ async def safe_close_lock_conn(lock_conn):
         logger.exception("Failed to close lock connection")
 
 
+async def hard_fail_on_duplicate_polling(bot: Bot):
+    """
+    Preflight check:
+    - прибирає webhook
+    - робить короткий get_updates
+    Якщо вже є інший long polling, Telegram може одразу дати ConflictError.
+    """
+    logger.info("Deleting webhook without dropping pending updates...")
+    await bot.delete_webhook(drop_pending_updates=False)
+
+    try:
+        await bot.get_updates(timeout=1, limit=1)
+    except TerminatedByOtherGetUpdates:
+        logger.error("Duplicate polling detected during preflight")
+        raise SystemExit(1)
+    except ConflictError:
+        logger.error("ConflictError during preflight get_updates")
+        raise SystemExit(1)
+
+
+async def run_polling_loop(bot: Bot, dp: Dispatcher, shutdown_event: asyncio.Event):
+    """
+    Власний polling loop:
+    - без циклу нескінченних retry після TerminatedByOtherGetUpdates
+    - при duplicate polling одразу завершується
+    """
+    logger.info("Start polling.")
+
+    offset = None
+
+    while not shutdown_event.is_set():
+        try:
+            updates = await bot.get_updates(
+                offset=offset,
+                timeout=20,
+                limit=100,
+            )
+
+            if not updates:
+                continue
+
+            offset = updates[-1].update_id + 1
+            await dp.process_updates(updates, fast=True)
+
+        except TerminatedByOtherGetUpdates:
+            logger.exception(
+                "Telegram reported conflict: another active polling instance exists. Exiting."
+            )
+            raise SystemExit(1)
+
+        except ConflictError:
+            logger.exception(
+                "Telegram reported polling conflict (ConflictError). Exiting."
+            )
+            raise SystemExit(1)
+
+        except RetryAfter as e:
+            logger.warning("RetryAfter from Telegram: sleep %s sec", e.timeout)
+            await asyncio.sleep(e.timeout)
+
+        except TelegramAPIError:
+            logger.exception("Telegram API error in polling loop")
+            await asyncio.sleep(3)
+
+        except asyncio.CancelledError:
+            raise
+
+        except Exception:
+            logger.exception("Unexpected polling loop error")
+            await asyncio.sleep(3)
+
+    logger.warning("Polling loop stopped")
+
+
 async def main():
     bot = None
     dp = None
@@ -228,8 +274,14 @@ async def main():
     try:
         settings.validate()
 
-        token = settings.bot_token
-        database_url = settings.database_url
+        token = (settings.bot_token or "").strip()
+        database_url = (settings.database_url or "").strip()
+
+        if not token:
+            raise ValueError("BOT_TOKEN is empty")
+        if not database_url:
+            raise ValueError("DATABASE_URL is empty")
+
         enable_polling = os.getenv("ENABLE_POLLING", "true").lower() == "true"
 
         fingerprint = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
@@ -260,8 +312,7 @@ async def main():
 
         if not locked:
             logger.error(
-                "Polling lock is already held by another instance. "
-                "This instance will exit. PID=%s HOST=%s",
+                "Polling lock is already held by another instance. Exiting. PID=%s HOST=%s",
                 os.getpid(),
                 socket.gethostname(),
             )
@@ -289,8 +340,7 @@ async def main():
             socket.gethostname(),
         )
 
-        logger.info("Deleting webhook without dropping pending updates...")
-        await bot.delete_webhook(drop_pending_updates=False)
+        await hard_fail_on_duplicate_polling(bot)
 
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -304,11 +354,9 @@ async def main():
             pg_backend_pid,
         )
 
-        polling_task = asyncio.create_task(dp.start_polling())
+        polling_task = asyncio.create_task(run_polling_loop(bot, dp, shutdown_event))
         shutdown_wait_task = asyncio.create_task(shutdown_event.wait())
-        monitoring_task = asyncio.create_task(
-            stale_orders_watcher(bot, shutdown_event)
-        )
+        monitoring_task = asyncio.create_task(stale_orders_watcher(bot, shutdown_event))
 
         done, pending = await asyncio.wait(
             {polling_task, shutdown_wait_task, monitoring_task},
@@ -345,16 +393,6 @@ async def main():
                 exc = monitoring_task.exception()
                 if exc:
                     raise exc
-
-    except TerminatedByOtherGetUpdates:
-        logger.exception(
-            "Telegram reported conflict: another active polling instance exists. "
-            "Make sure only one instance with this BOT_TOKEN is running. "
-            "PID=%s HOST=%s",
-            os.getpid(),
-            socket.gethostname(),
-        )
-        raise SystemExit(1)
 
     except SystemExit:
         raise
