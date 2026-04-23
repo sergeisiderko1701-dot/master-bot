@@ -16,6 +16,110 @@ async def _ensure_index(conn, sql: str):
     await conn.execute(sql)
 
 
+async def _cleanup_duplicate_offers_before_unique_index(conn):
+    """
+    Old MVP data may contain several offers from the same master for the same order.
+    PostgreSQL cannot create UNIQUE(order_id, master_user_id) until those duplicates are removed.
+
+    Strategy:
+    - keep the newest row by id for each (order_id, master_user_id);
+    - delete older duplicates;
+    - log how many rows were removed.
+    """
+    deleted = await conn.fetchval(
+        """
+        WITH ranked AS (
+            SELECT
+                id,
+                ROW_NUMBER() OVER (
+                    PARTITION BY order_id, master_user_id
+                    ORDER BY id DESC
+                ) AS rn
+            FROM offers
+        ), deleted AS (
+            DELETE FROM offers
+            WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
+            RETURNING id
+        )
+        SELECT COUNT(*) FROM deleted
+        """
+    )
+    deleted = int(deleted or 0)
+    if deleted:
+        logger.warning(
+            "Cleaned duplicate offers before creating unique index: deleted=%s",
+            deleted,
+        )
+
+
+async def _cleanup_duplicate_chats_before_unique_index(conn):
+    """
+    Keep one chat per order before creating UNIQUE(chats.order_id).
+    Chat messages from duplicate chats are moved to the kept chat id.
+    """
+    duplicate_rows = await conn.fetch(
+        """
+        WITH ranked AS (
+            SELECT
+                id,
+                order_id,
+                FIRST_VALUE(id) OVER (
+                    PARTITION BY order_id
+                    ORDER BY
+                        CASE WHEN status='active' THEN 0 ELSE 1 END,
+                        id DESC
+                ) AS keep_id,
+                ROW_NUMBER() OVER (
+                    PARTITION BY order_id
+                    ORDER BY
+                        CASE WHEN status='active' THEN 0 ELSE 1 END,
+                        id DESC
+                ) AS rn
+            FROM chats
+        )
+        SELECT id, keep_id
+        FROM ranked
+        WHERE rn > 1
+        """
+    )
+
+    if not duplicate_rows:
+        return
+
+    moved_messages = 0
+    deleted_chats = 0
+
+    for row in duplicate_rows:
+        old_chat_id = row["id"]
+        keep_chat_id = row["keep_id"]
+
+        result = await conn.execute(
+            """
+            UPDATE chat_messages
+            SET chat_id=$1
+            WHERE chat_id=$2
+            """,
+            keep_chat_id,
+            old_chat_id,
+        )
+        try:
+            moved_messages += int(result.split()[-1])
+        except Exception:
+            pass
+
+        await conn.execute(
+            "DELETE FROM chats WHERE id=$1",
+            old_chat_id,
+        )
+        deleted_chats += 1
+
+    logger.warning(
+        "Cleaned duplicate chats before creating unique index: deleted_chats=%s moved_messages=%s",
+        deleted_chats,
+        moved_messages,
+    )
+
+
 async def _ensure_constraint(conn, name: str, sql: str):
     exists = await conn.fetchval(
         "SELECT 1 FROM pg_constraint WHERE conname=$1",
@@ -374,6 +478,10 @@ async def init_db(database_url: str):
             FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
             NOT VALID
         """)
+
+        # Clean old duplicate MVP data before creating UNIQUE indexes.
+        await _cleanup_duplicate_offers_before_unique_index(conn)
+        await _cleanup_duplicate_chats_before_unique_index(conn)
 
         # INDEXES
         # =========================================================
