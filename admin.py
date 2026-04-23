@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import suppress
 
 from aiogram import types
 from aiogram.dispatcher import FSMContext
@@ -243,6 +244,24 @@ def _event_actor_text(actor_role: str, actor_user_id) -> str:
     if actor_user_id:
         return f"{actor_role or 'user'}:{actor_user_id}"
     return actor_role or "system"
+
+
+async def _safe_disable_markup(message: types.Message):
+    with suppress(Exception):
+        await message.edit_reply_markup(reply_markup=None)
+
+
+async def _finish_callback_action(
+    call: types.CallbackQuery,
+    *,
+    text_for_chat: str,
+    answer_text: str = "Готово",
+    disable_markup: bool = True,
+):
+    if disable_markup:
+        await _safe_disable_markup(call.message)
+    await call.message.answer(text_for_chat)
+    await call.answer(answer_text)
 
 
 async def _get_unique_recipient_ids(mode: str):
@@ -802,6 +821,7 @@ def register(dp):
             await call.answer()
             return
 
+        await _safe_disable_markup(call.message)
         await call.message.answer(
             "⏳ <b>Розсилку запущено</b>\n\n"
             "Будь ласка, зачекайте завершення.",
@@ -826,11 +846,11 @@ def register(dp):
             return
 
         await state.finish()
-        await call.message.answer(
-            "❌ <b>Розсилку скасовано</b>",
-            reply_markup=admin_menu_kb(),
+        await _finish_callback_action(
+            call,
+            text_for_chat="❌ <b>Розсилку скасовано</b>",
+            answer_text="Скасовано",
         )
-        await call.answer("Скасовано")
 
     @dp.message_handler(lambda m: m.text == "📝 Модерація майстрів", state="*")
     async def pending_masters(message: types.Message, state: FSMContext):
@@ -871,8 +891,10 @@ def register(dp):
         except Exception:
             pass
 
-        await call.message.answer("✅ Майстра підтверджено.")
-        await call.answer("Готово")
+        await _finish_callback_action(
+            call,
+            text_for_chat="✅ Майстра підтверджено.",
+        )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_reject_master_"), state="*")
     async def admin_reject_master(call: types.CallbackQuery, state: FSMContext):
@@ -897,8 +919,10 @@ def register(dp):
         except Exception:
             pass
 
-        await call.message.answer("❌ Анкету відхилено.")
-        await call.answer("Готово")
+        await _finish_callback_action(
+            call,
+            text_for_chat="❌ Анкету відхилено.",
+        )
 
     @dp.message_handler(lambda m: m.text == "👷 Майстри", state="*")
     async def admin_masters(message: types.Message, state: FSMContext):
@@ -938,8 +962,10 @@ def register(dp):
         except Exception:
             pass
 
-        await call.message.answer("🚫 Майстра заблоковано.")
-        await call.answer("Готово")
+        await _finish_callback_action(
+            call,
+            text_for_chat="🚫 Майстра заблоковано.",
+        )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_unblock_master_"), state="*")
     async def admin_unblock_master(call: types.CallbackQuery, state: FSMContext):
@@ -963,8 +989,10 @@ def register(dp):
         except Exception:
             pass
 
-        await call.message.answer("✅ Майстра розблоковано.")
-        await call.answer("Готово")
+        await _finish_callback_action(
+            call,
+            text_for_chat="✅ Майстра розблоковано.",
+        )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_delete_master_"), state="*")
     async def admin_delete_master(call: types.CallbackQuery, state: FSMContext):
@@ -988,8 +1016,10 @@ def register(dp):
         except Exception:
             pass
 
-        await call.message.answer("🗑 Майстра видалено.")
-        await call.answer("Готово")
+        await _finish_callback_action(
+            call,
+            text_for_chat="🗑 Майстра видалено.",
+        )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_open_master_by_user_"), state="*")
     async def admin_open_master_by_user(call: types.CallbackQuery, state: FSMContext):
@@ -1064,8 +1094,10 @@ def register(dp):
         order_id = int(call.data.split("_")[-1])
         await set_order_status(order_id, "expired")
         await close_chat(order_id)
-        await call.message.answer("⌛ Заявку позначено як неактуальну.")
-        await call.answer("Готово")
+        await _finish_callback_action(
+            call,
+            text_for_chat="⌛ Заявку позначено як неактуальну.",
+        )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_progress_order_"), state="*")
     async def admin_progress_order(call: types.CallbackQuery, state: FSMContext):
@@ -1078,8 +1110,10 @@ def register(dp):
         selected_master_id = row["selected_master_id"] if row else None
 
         await set_order_status(order_id, "in_progress", selected_master_id)
-        await call.message.answer("🛠 Заявку переведено в статус 'в роботі'.")
-        await call.answer("Готово")
+        await _finish_callback_action(
+            call,
+            text_for_chat="🛠 Заявку переведено в статус 'в роботі'.",
+        )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_done_order_"), state="*")
     async def admin_done_order(call: types.CallbackQuery, state: FSMContext):
@@ -1093,8 +1127,10 @@ def register(dp):
 
         await set_order_status(order_id, "done", selected_master_id)
         await close_chat(order_id)
-        await call.message.answer("🏁 Заявку завершено.")
-        await call.answer("Готово")
+        await _finish_callback_action(
+            call,
+            text_for_chat="🏁 Заявку завершено.",
+        )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("admin_reset_order_"), state="*")
     async def admin_reset_order(call: types.CallbackQuery, state: FSMContext):
@@ -1105,8 +1141,10 @@ def register(dp):
         order_id = int(call.data.split("_")[-1])
         await set_order_status(order_id, "new", None)
         await close_chat(order_id)
-        await call.message.answer("🔄 Заявку повернуто в статус 'нова'.")
-        await call.answer("Готово")
+        await _finish_callback_action(
+            call,
+            text_for_chat="🔄 Заявку повернуто в статус 'нова'.",
+        )
 
     @dp.message_handler(lambda m: m.text == "🔎 Пошук заявки", state="*")
     async def search_order_start(message: types.Message, state: FSMContext):
@@ -1277,8 +1315,10 @@ def register(dp):
             return
         complaint_id = int(call.data.split("_")[-1])
         await execute("DELETE FROM complaints WHERE id=$1", complaint_id)
-        await call.message.answer("🗑 Скаргу видалено.")
-        await call.answer("Готово")
+        await _finish_callback_action(
+            call,
+            text_for_chat="🗑 Скаргу видалено.",
+        )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("support_reply_"), state="*")
     async def support_reply_start(call: types.CallbackQuery, state: FSMContext):
@@ -1287,6 +1327,7 @@ def register(dp):
             return
 
         user_id = int(call.data.split("_")[-1])
+        await _safe_disable_markup(call.message)
         await state.finish()
         await state.update_data(support_target_user_id=user_id)
         await AdminPanelState.support_reply.set()
