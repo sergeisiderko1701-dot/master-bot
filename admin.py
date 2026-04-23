@@ -18,6 +18,7 @@ from keyboards import main_menu_kb
 from repositories import (
     admin_funnel_stats,
     admin_stats,
+    approve_suspicious_order,
     close_chat,
     delete_master_by_id,
     execute,
@@ -27,12 +28,21 @@ from repositories import (
     get_order_row,
     list_admin_masters,
     list_admin_orders,
+    list_approved_masters_for_category,
     list_order_offers,
     list_pending_masters,
+    list_suspicious_orders,
+    reject_suspicious_order,
     set_master_status_by_id,
     set_order_status,
 )
-from services import send_admin_order_detail, send_master_card, send_order_card
+from services import (
+    notify_masters_about_order,
+    send_admin_order_detail,
+    send_master_card,
+    send_order_card,
+)
+from ui_texts import suspicious_order_admin_text
 from utils import is_admin, now_ts
 
 
@@ -77,6 +87,8 @@ EVENT_TYPE_LABELS = {
     "order_finished": "🏁 Заявку завершено",
     "order_rated": "⭐ Клієнт залишив оцінку",
     "order_status_changed": "🔁 Статус заявки змінено",
+    "order_approved_by_admin": "✅ Адмін підтвердив підозрілу заявку",
+    "order_rejected_as_suspect": "❌ Адмін відхилив підозрілу заявку",
 }
 
 
@@ -91,10 +103,10 @@ def admin_menu_kb():
     return _reply_kb([
         ["📊 Статистика", "📈 Воронка"],
         ["📦 Заявки", "📦 Завислі заявки"],
+        ["🕵️ Підозрілі заявки", "⚠️ Скарги"],
         ["🔎 Пошук заявки", "🔎 Пошук користувача"],
         ["🔎 Пошук майстра", "📝 Модерація майстрів"],
-        ["👷 Майстри", "⚠️ Скарги"],
-        ["📣 СМС розсилка"],
+        ["👷 Майстри", "📣 СМС розсилка"],
         ["⬅️ Назад", "🏠 У меню"],
     ])
 
@@ -179,6 +191,14 @@ def admin_order_actions_inline(order_id: int, status: str):
     if status in {"offered", "matched", "in_progress"}:
         kb.add(InlineKeyboardButton("🔄 Повернути в нові", callback_data=f"admin_reset_order_{order_id}"))
 
+    return kb
+
+
+def suspicious_order_actions_inline(order_id: int):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("✅ Підтвердити заявку", callback_data=f"admin_approve_suspect_{order_id}"))
+    kb.add(InlineKeyboardButton("❌ Відхилити як фейк", callback_data=f"admin_reject_suspect_{order_id}"))
+    kb.add(InlineKeyboardButton("📄 Деталі заявки", callback_data=f"admin_order_detail_{order_id}"))
     return kb
 
 
@@ -618,6 +638,30 @@ def register(dp):
         )
         await bot.send_message(chat_id, _master_summary_text(row, stats), reply_markup=admin_menu_kb())
 
+    async def _show_suspicious_orders(chat_id: int, bot):
+        rows, total = await list_suspicious_orders(limit=20, offset=0)
+
+        if not rows:
+            await bot.send_message(
+                chat_id,
+                "🕵️ <b>Підозрілих заявок немає</b>",
+                reply_markup=admin_menu_kb(),
+            )
+            return
+
+        await bot.send_message(
+            chat_id,
+            f"🕵️ <b>Підозрілі заявки</b>\n\nЗнайдено: <b>{total}</b>",
+            reply_markup=admin_menu_kb(),
+        )
+
+        for row in rows:
+            await bot.send_message(
+                chat_id,
+                suspicious_order_admin_text(row),
+                reply_markup=suspicious_order_actions_inline(row["id"]),
+            )
+
     async def _preview_broadcast(call_or_message, state: FSMContext, content_type: str, text: str = None, file_id: str = None):
         data = await state.get_data()
         mode = data.get("broadcast_mode")
@@ -774,6 +818,58 @@ def register(dp):
         await message.answer(
             _funnel_text(label, stats),
             reply_markup=admin_funnel_menu_kb(),
+        )
+
+    @dp.message_handler(lambda m: m.text == "🕵️ Підозрілі заявки", state="*")
+    async def admin_suspicious_orders(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await _show_suspicious_orders(message.chat.id, dp.bot)
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_approve_suspect_"), state="*")
+    async def admin_approve_suspect(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            await call.answer()
+            return
+
+        order_id = int(call.data.split("_")[-1])
+        order = await approve_suspicious_order(order_id, call.from_user.id)
+        if not order:
+            await call.answer("Заявка вже оброблена або не знайдена", show_alert=True)
+            return
+
+        masters = await list_approved_masters_for_category(order["category"])
+        await notify_masters_about_order(dp.bot, order, masters)
+
+        await _finish_callback_action(
+            call,
+            text_for_chat=f"✅ Підозрілу заявку #{order_id} підтверджено і надіслано майстрам.",
+        )
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_reject_suspect_"), state="*")
+    async def admin_reject_suspect(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            await call.answer()
+            return
+
+        order_id = int(call.data.split("_")[-1])
+        order = await reject_suspicious_order(order_id, call.from_user.id)
+        if not order:
+            await call.answer("Заявка вже оброблена або не знайдена", show_alert=True)
+            return
+
+        try:
+            await dp.bot.send_message(
+                order["user_id"],
+                f"❌ <b>Заявку #{order_id} не підтверджено</b>\n\n"
+                "Будь ласка, опишіть проблему детальніше і залиште коректний номер телефону.",
+            )
+        except Exception:
+            pass
+
+        await _finish_callback_action(
+            call,
+            text_for_chat=f"❌ Заявку #{order_id} відхилено як підозрілу.",
         )
 
     @dp.message_handler(lambda m: m.text == "📣 СМС розсилка", state="*")
@@ -1085,6 +1181,7 @@ def register(dp):
         if not is_admin(call.from_user.id):
             await call.answer()
             return
+
         master_user_id = int(call.data.split("_")[-1])
         await _show_master_by_user_id(call.message.chat.id, master_user_id, dp.bot)
         await call.answer()
@@ -1140,6 +1237,7 @@ def register(dp):
         if not is_admin(call.from_user.id):
             await call.answer()
             return
+
         order_id = int(call.data.split("_")[-1])
         await _show_order_history(call.message.chat.id, order_id, dp.bot)
         await call.answer()
@@ -1372,6 +1470,7 @@ def register(dp):
         if not is_admin(call.from_user.id):
             await call.answer()
             return
+
         complaint_id = int(call.data.split("_")[-1])
         await execute("DELETE FROM complaints WHERE id=$1", complaint_id)
         await _finish_callback_action(
