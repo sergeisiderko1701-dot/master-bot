@@ -16,6 +16,15 @@ async def _ensure_index(conn, sql: str):
     await conn.execute(sql)
 
 
+async def _ensure_constraint(conn, name: str, sql: str):
+    exists = await conn.fetchval(
+        "SELECT 1 FROM pg_constraint WHERE conname=$1",
+        name,
+    )
+    if not exists:
+        await conn.execute(sql)
+
+
 async def init_db(database_url: str):
     global _pool
 
@@ -300,6 +309,72 @@ async def init_db(database_url: str):
         await _ensure_column(conn, "support_messages", "created_at BIGINT DEFAULT 0")
 
         # =========================================================
+        # =========================================================
+        # SAFE CONSTRAINTS (NOT VALID = old dirty data will not break startup)
+        # =========================================================
+        await _ensure_constraint(conn, "chk_orders_status", """
+            ALTER TABLE orders
+            ADD CONSTRAINT chk_orders_status
+            CHECK (status IN ('new','offered','matched','in_progress','done','cancelled','expired','dispute'))
+            NOT VALID
+        """)
+
+        await _ensure_constraint(conn, "chk_orders_moderation_status", """
+            ALTER TABLE orders
+            ADD CONSTRAINT chk_orders_moderation_status
+            CHECK (moderation_status IN ('approved','pending_review','rejected'))
+            NOT VALID
+        """)
+
+        await _ensure_constraint(conn, "chk_offers_status", """
+            ALTER TABLE offers
+            ADD CONSTRAINT chk_offers_status
+            CHECK (status IN ('active','chosen','rejected'))
+            NOT VALID
+        """)
+
+        await _ensure_constraint(conn, "chk_chats_status", """
+            ALTER TABLE chats
+            ADD CONSTRAINT chk_chats_status
+            CHECK (status IN ('active','closed'))
+            NOT VALID
+        """)
+
+        await _ensure_constraint(conn, "fk_offers_order", """
+            ALTER TABLE offers
+            ADD CONSTRAINT fk_offers_order
+            FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+            NOT VALID
+        """)
+
+        await _ensure_constraint(conn, "fk_chats_order", """
+            ALTER TABLE chats
+            ADD CONSTRAINT fk_chats_order
+            FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+            NOT VALID
+        """)
+
+        await _ensure_constraint(conn, "fk_chat_messages_chat", """
+            ALTER TABLE chat_messages
+            ADD CONSTRAINT fk_chat_messages_chat
+            FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+            NOT VALID
+        """)
+
+        await _ensure_constraint(conn, "fk_complaints_order", """
+            ALTER TABLE complaints
+            ADD CONSTRAINT fk_complaints_order
+            FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+            NOT VALID
+        """)
+
+        await _ensure_constraint(conn, "fk_order_events_order", """
+            ALTER TABLE order_events
+            ADD CONSTRAINT fk_order_events_order
+            FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+            NOT VALID
+        """)
+
         # INDEXES
         # =========================================================
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_masters_status ON masters(status)")
@@ -313,15 +388,22 @@ async def init_db(database_url: str):
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at)")
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_orders_moderation_status ON orders(moderation_status)")
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_orders_is_suspect ON orders(is_suspect)")
+        await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_orders_status_category_created ON orders(status, category, created_at DESC)")
+        await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_orders_moderation_created ON orders(moderation_status, created_at DESC)")
 
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_offers_order_id ON offers(order_id)")
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_offers_master_user_id ON offers(master_user_id)")
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_offers_status ON offers(status)")
+        await _ensure_index(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ux_offers_order_master ON offers(order_id, master_user_id)")
+        await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_offers_order_status ON offers(order_id, status)")
 
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_chats_order_id ON chats(order_id)")
+        await _ensure_index(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ux_chats_order ON chats(order_id)")
+        await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_chats_order_status ON chats(order_id, status)")
 
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_chat_messages_order_id ON chat_messages(order_id)")
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id)")
+        await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_chat_messages_order_created ON chat_messages(order_id, created_at DESC)")
 
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_complaints_order_id ON complaints(order_id)")
 
