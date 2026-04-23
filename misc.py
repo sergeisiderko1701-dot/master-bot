@@ -7,7 +7,8 @@ from aiogram.dispatcher import FSMContext
 
 from config import settings
 from keyboards import back_menu_kb, main_menu_kb
-from repositories import add_support_message, approved_master_row, touch_master_presence
+from presence import update_master_presence_if_needed
+from repositories import add_support_message
 from security import allow_message_action
 from states import SupportWrite
 from ui_texts import menu_text, support_intro, support_sent, welcome_text
@@ -20,18 +21,14 @@ BACK_BUTTONS = {"⬅️ Назад", "Назад", "🔙 Назад"}
 
 
 def register(dp):
-    async def update_master_presence_if_needed(user_id: int):
-        master = await approved_master_row(user_id)
-        if master:
-            await touch_master_presence(user_id)
-
     @dp.message_handler(commands=["diag"], state="*")
     async def diag_handler(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             return
 
         await message.answer(
-            f"hostname={socket.gethostname()}\n"
+            f"hostname={socket.gethostname()}
+"
             f"pid={os.getpid()}"
         )
 
@@ -71,7 +68,9 @@ def register(dp):
         await update_master_presence_if_needed(call.from_user.id)
 
         await call.message.answer(
-            "💬 <b>Діалог закрито</b>\n\nПовертаю вас до меню.",
+            "💬 <b>Діалог закрито</b>
+
+Повертаю вас до меню.",
             reply_markup=main_menu_kb(is_admin_user=is_admin(call.from_user.id))
         )
         await call.answer()
@@ -119,14 +118,21 @@ def register(dp):
             return
 
         user = message.from_user
-        username_line = f"🔗 Username: @{user.username}\n" if user.username else ""
+        username_line = f"🔗 Username: @{user.username}
+" if user.username else ""
 
         admin_text = (
-            "🆘 <b>Нове звернення в підтримку</b>\n\n"
-            f"👤 <b>Користувач:</b> {user.full_name}\n"
-            f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
+            "🆘 <b>Нове звернення в підтримку</b>
+
+"
+            f"👤 <b>Користувач:</b> {user.full_name}
+"
+            f"🆔 <b>ID:</b> <code>{user.id}</code>
+"
             f"{username_line}"
-            f"\n💬 <b>Повідомлення:</b>\n{text}"
+            f"
+💬 <b>Повідомлення:</b>
+{text}"
         )
 
         try:
