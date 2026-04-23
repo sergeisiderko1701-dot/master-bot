@@ -80,6 +80,31 @@ def order_created_text() -> str:
     )
 
 
+def order_sent_to_review_text(order_id: int, reasons: list[str]) -> str:
+    reasons_block = "\n".join(f"• {item}" for item in reasons) if reasons else "• автоматична перевірка"
+
+    return (
+        f"🛡 <b>Заявку #{order_id} прийнято</b>\n\n"
+        "Перед публікацією вона проходить коротку перевірку.\n\n"
+        f"{reasons_block}\n\n"
+        "Якщо все гаразд — заявка буде підтверджена і піде майстрам."
+    )
+
+
+def suspicious_order_admin_text(order_row) -> str:
+    return (
+        "🕵️ <b>Підозріла заявка</b>\n\n"
+        f"🆔 Заявка: <b>#{order_row['id']}</b>\n"
+        f"👤 Клієнт: <code>{order_row['user_id']}</code>\n"
+        f"🔧 Категорія: <b>{category_label(order_row['category'])}</b>\n"
+        f"📍 Район: {order_row['district'] or '—'}\n"
+        f"📞 Телефон: {order_row['client_phone'] or '—'}\n\n"
+        f"📝 <b>Проблема:</b>\n{order_row['problem'] or '—'}\n\n"
+        f"⚠️ <b>Причини:</b>\n{order_row['suspicion_reasons'] or '—'}\n"
+        f"📊 <b>Score:</b> {order_row['suspicion_score'] or 0}"
+    )
+
+
 def choose_category_text() -> str:
     return (
         "🔧 <b>Оберіть спеціальність майстра</b>\n\n"
