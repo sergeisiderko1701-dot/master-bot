@@ -7,12 +7,14 @@ from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 from anti_fake import evaluate_order_antifake
 from config import settings
-from constants import CATEGORY_LABEL_TO_VALUE
+from constants import CATEGORY_LABEL_TO_VALUE, category_label
 from keyboards import (
     back_menu_kb,
     categories_kb,
     client_actions_kb,
     client_order_actions_inline,
+    confirm_client_cancel_inline,
+    confirm_order_submit_inline,
     main_menu_kb,
     offer_select_inline,
 )
@@ -331,6 +333,112 @@ def register(dp):
         )
         await message.answer(tip_before_submit())
 
+    def _order_preview_text(data: dict) -> str:
+        media_text = "додано" if data.get("media_file_id") else "без фото/відео"
+        return (
+            "📋 <b>Перевірте заявку перед відправкою</b>\n\n"
+            f"🔧 <b>Категорія:</b> {category_label(data.get('client_category'))}\n"
+            f"📍 <b>Район / адреса:</b> {data.get('district') or '—'}\n"
+            f"📝 <b>Проблема:</b> {data.get('problem') or '—'}\n"
+            f"📞 <b>Телефон:</b> {data.get('client_phone') or '—'}\n"
+            f"📷 <b>Медіа:</b> {media_text}\n\n"
+            "Все правильно?"
+        )
+
+    async def _create_order_from_state(message_or_call, state: FSMContext):
+        data = await state.get_data()
+        user_id = message_or_call.from_user.id
+        answer_target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
+
+        required = ["client_category", "district", "problem", "client_phone"]
+        if any(not data.get(key) for key in required):
+            await state.finish()
+            await answer_target.answer(
+                "Не вдалося створити заявку: частина даних втрачена. Заповніть заявку ще раз.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(user_id)),
+            )
+            return
+
+        recent_orders_count = await get_recent_client_order_count(user_id, 3600)
+        duplicate_problem = await has_duplicate_recent_problem(user_id, data.get("problem", ""), 7)
+
+        has_media = bool(data.get("media_file_id"))
+        antifake = evaluate_order_antifake(
+            problem=data.get("problem", ""),
+            phone=data.get("client_phone", ""),
+            recent_orders_count=recent_orders_count,
+            duplicate_problem=duplicate_problem,
+            has_media=has_media,
+        )
+
+        moderation_status = "pending_review" if antifake.is_suspect else "approved"
+
+        order_id = await create_order(
+            user_id=user_id,
+            category=data["client_category"],
+            district=data.get("district", ""),
+            problem=data.get("problem", ""),
+            media_type=data.get("media_type"),
+            media_file_id=data.get("media_file_id"),
+            client_phone=data.get("client_phone"),
+            is_suspect=antifake.is_suspect,
+            suspicion_score=antifake.score,
+            suspicion_reasons="\n".join(antifake.reasons) if antifake.reasons else None,
+            moderation_status=moderation_status,
+        )
+
+        await set_cooldown(user_id, "client_create_order", now_ts())
+        order_row = await get_order_row(order_id)
+
+        logger.info(
+            "ORDER CREATED id=%s category=%s suspect=%s score=%s moderation=%s",
+            order_id, data["client_category"], antifake.is_suspect, antifake.score, moderation_status,
+        )
+
+        try:
+            await notify_admin_about_order(dp.bot, settings.admin_id, order_row)
+        except Exception as e:
+            logger.warning("Помилка повідомлення адміну по заявці %s: %s", order_id, e)
+
+        await state.finish()
+        await state.update_data(client_category=data["client_category"])
+
+        if antifake.is_suspect:
+            try:
+                reasons_text = "\n".join(f"• {item}" for item in antifake.reasons) if antifake.reasons else "• автоматична перевірка"
+                await dp.bot.send_message(
+                    settings.admin_id,
+                    (
+                        f"🕵️ <b>Нова підозріла заявка</b>\n\n"
+                        f"🆔 #{order_id}\n"
+                        f"👤 user_id: <code>{user_id}</code>\n"
+                        f"📞 Телефон: {data.get('client_phone') or '—'}\n"
+                        f"📝 Проблема: {data.get('problem') or '—'}\n\n"
+                        f"⚠️ Причини:\n{reasons_text}"
+                    ),
+                )
+            except Exception as e:
+                logger.warning("Помилка повідомлення адміну про підозрілу заявку %s: %s", order_id, e)
+
+            await answer_target.answer(
+                order_sent_to_review_text(order_id, antifake.reasons),
+                reply_markup=main_menu_kb(is_admin_user=is_admin(user_id)),
+            )
+            return
+
+        masters = await list_approved_masters_for_category(data["client_category"])
+        logger.info("FILTERED MASTERS FOR ORDER=%s -> %s", order_id, len(masters))
+
+        try:
+            await notify_masters_about_order(dp.bot, order_row, masters)
+        except Exception as e:
+            logger.warning("Помилка розсилки майстрам по заявці %s: %s", order_id, e)
+
+        await answer_target.answer(
+            order_created_text(),
+            reply_markup=main_menu_kb(is_admin_user=is_admin(user_id)),
+        )
+
     @dp.message_handler(content_types=types.ContentTypes.ANY, state=ClientCreateOrder.media)
     async def client_order_media(message: types.Message, state: FSMContext):
         allowed = await allow_message_action(
@@ -343,7 +451,6 @@ def register(dp):
         if not allowed:
             return
 
-        data = await state.get_data()
         media_type = None
         media_file_id = None
         text = (message.text or "").strip().lower()
@@ -363,98 +470,51 @@ def register(dp):
             )
             return
 
-        recent_orders_count = await get_recent_client_order_count(message.from_user.id, 3600)
-        duplicate_problem = await has_duplicate_recent_problem(
-            message.from_user.id,
-            data.get("problem", ""),
-            7,
+        await state.update_data(media_type=media_type, media_file_id=media_file_id)
+        data = await state.get_data()
+
+        await message.answer(_order_preview_text(data), reply_markup=confirm_order_submit_inline())
+
+    @dp.callback_query_handler(lambda c: c.data == "client_order_submit_confirm", state=ClientCreateOrder.media)
+    async def client_order_submit_confirm(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="client_order_submit_confirm",
+            limit=5,
+            window_seconds=120,
+            mute_seconds=300,
         )
-
-        has_media = bool(media_file_id)
-        antifake = evaluate_order_antifake(
-            problem=data.get("problem", ""),
-            phone=data.get("client_phone", ""),
-            recent_orders_count=recent_orders_count,
-            duplicate_problem=duplicate_problem,
-            has_media=has_media,
-        )
-
-        moderation_status = "pending_review" if antifake.is_suspect else "approved"
-
-        order_id = await create_order(
-            user_id=message.from_user.id,
-            category=data["client_category"],
-            district=data.get("district", ""),
-            problem=data.get("problem", ""),
-            media_type=media_type,
-            media_file_id=media_file_id,
-            client_phone=data.get("client_phone"),
-            is_suspect=antifake.is_suspect,
-            suspicion_score=antifake.score,
-            suspicion_reasons="\n".join(antifake.reasons) if antifake.reasons else None,
-            moderation_status=moderation_status,
-        )
-
-        await set_cooldown(
-            message.from_user.id,
-            "client_create_order",
-            now_ts(),
-        )
-
-        order_row = await get_order_row(order_id)
-
-        logger.info(
-            "ORDER CREATED id=%s category=%s suspect=%s score=%s moderation=%s",
-            order_id,
-            data["client_category"],
-            antifake.is_suspect,
-            antifake.score,
-            moderation_status,
-        )
-
-        try:
-            await notify_admin_about_order(dp.bot, settings.admin_id, order_row)
-        except Exception as e:
-            logger.warning("Помилка повідомлення адміну по заявці %s: %s", order_id, e)
-
-        await state.finish()
-        await state.update_data(client_category=data["client_category"])
-
-        if antifake.is_suspect:
-            try:
-                reasons_text = "\n".join(f"• {item}" for item in antifake.reasons) if antifake.reasons else "• автоматична перевірка"
-                await dp.bot.send_message(
-                    settings.admin_id,
-                    (
-                        f"🕵️ <b>Нова підозріла заявка</b>\n\n"
-                        f"🆔 #{order_id}\n"
-                        f"👤 user_id: <code>{message.from_user.id}</code>\n"
-                        f"📞 Телефон: {data.get('client_phone') or '—'}\n"
-                        f"📝 Проблема: {data.get('problem') or '—'}\n\n"
-                        f"⚠️ Причини:\n{reasons_text}"
-                    ),
-                )
-            except Exception as e:
-                logger.warning("Помилка повідомлення адміну про підозрілу заявку %s: %s", order_id, e)
-
-            await message.answer(
-                order_sent_to_review_text(order_id, antifake.reasons),
-                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
-            )
+        if not allowed:
             return
 
-        masters = await list_approved_masters_for_category(data["client_category"])
-        logger.info("FILTERED MASTERS FOR ORDER=%s -> %s", order_id, len(masters))
-
         try:
-            await notify_masters_about_order(dp.bot, order_row, masters)
-        except Exception as e:
-            logger.warning("Помилка розсилки майстрам по заявці %s: %s", order_id, e)
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
-        await message.answer(
-            order_created_text(),
-            reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
-        )
+        await _create_order_from_state(call, state)
+        await call.answer("Заявку відправлено")
+
+    @dp.callback_query_handler(lambda c: c.data == "client_order_submit_edit", state=ClientCreateOrder.media)
+    async def client_order_submit_edit(call: types.CallbackQuery, state: FSMContext):
+        data = await state.get_data()
+        category = data.get("client_category")
+        await state.finish()
+        if category:
+            await state.update_data(client_category=category)
+        await ClientCreateOrder.district.set()
+        await call.message.answer("Добре, заповнимо заявку заново.\n\n" + ask_district_text(), reply_markup=back_menu_kb())
+        await call.answer("Редагування")
+
+    @dp.callback_query_handler(lambda c: c.data == "client_order_submit_cancel", state=ClientCreateOrder.media)
+    async def client_order_submit_cancel(call: types.CallbackQuery, state: FSMContext):
+        data = await state.get_data()
+        category = data.get("client_category")
+        await state.finish()
+        if category:
+            await state.update_data(client_category=category)
+        await call.message.answer("❌ <b>Створення заявки скасовано</b>", reply_markup=client_actions_kb())
+        await call.answer("Скасовано")
 
     @dp.message_handler(lambda m: m.text == "📦 Мої заявки", state="*")
     async def my_orders(message: types.Message, state: FSMContext):
@@ -542,8 +602,8 @@ def register(dp):
 
         await call.answer()
 
-    @dp.callback_query_handler(lambda c: c.data.startswith("client_cancel_"), state="*")
-    async def client_cancel_order(call: types.CallbackQuery, state: FSMContext):
+    @dp.callback_query_handler(lambda c: c.data.startswith("client_cancel_") and not c.data.startswith("client_cancel_confirm_"), state="*")
+    async def client_cancel_order_start(call: types.CallbackQuery, state: FSMContext):
         allowed = await allow_callback_action(
             call,
             action_key="client_cancel_order",
@@ -575,25 +635,48 @@ def register(dp):
             )
             return
 
+        await call.message.answer(
+            f"❗ <b>Підтвердіть скасування заявки #{order_id}</b>\n\n"
+            "Після скасування майстри більше не зможуть відгукуватися на цю заявку.",
+            reply_markup=confirm_client_cancel_inline(order_id),
+        )
+        await call.answer("Підтвердіть дію")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("client_cancel_confirm_"), state="*")
+    async def client_cancel_order_confirm(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="client_cancel_order_confirm",
+            limit=10,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
+        order_id = int(call.data.split("_")[-1])
+        order = await get_order_row(order_id)
+
+        if not order or order["user_id"] != call.from_user.id:
+            await call.answer("Заявку не знайдено.", show_alert=True)
+            return
+
+        if order["status"] not in {"new", "offered", "matched"}:
+            await call.answer("Заявку вже не можна скасувати.", show_alert=True)
+            return
+
         try:
             await cancel_order(order_id, call.from_user.id)
-            logger.info(
-                "CLIENT CANCEL SUCCESS user_id=%s order_id=%s",
-                call.from_user.id,
-                order_id,
-            )
+            logger.info("CLIENT CANCEL SUCCESS user_id=%s order_id=%s", call.from_user.id, order_id)
         except Exception as e:
-            logger.exception(
-                "CLIENT CANCEL FAILED user_id=%s order_id=%s error=%s",
-                call.from_user.id,
-                order_id,
-                e,
-            )
+            logger.exception("CLIENT CANCEL FAILED user_id=%s order_id=%s error=%s", call.from_user.id, order_id, e)
             await call.answer("Не вдалося скасувати заявку.", show_alert=True)
             return
 
-        await call.message.answer(
-            f"❌ <b>Заявку #{order_id} скасовано</b>",
-            reply_markup=client_actions_kb(),
-        )
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await call.message.answer(f"❌ <b>Заявку #{order_id} скасовано</b>", reply_markup=client_actions_kb())
         await call.answer("Готово")
