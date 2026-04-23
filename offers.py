@@ -552,7 +552,10 @@ def register(dp):
             await call.answer("Заявка недоступна для завершення.", show_alert=True)
             return
 
-        await finish_order(order_id)
+        result = await finish_order(order_id, call.from_user.id)
+        if not result:
+            await call.answer("Заявка вже змінилась або недоступна.", show_alert=True)
+            return
 
         await call.message.answer(
             f"🏁 <b>Заявку #{order_id} завершено</b>",
