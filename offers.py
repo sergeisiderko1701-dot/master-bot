@@ -9,6 +9,9 @@ from keyboards import (
     back_menu_kb,
     chat_reply_kb,
     client_order_actions_inline,
+    confirm_choose_offer_inline,
+    confirm_finish_order_inline,
+    confirm_refuse_order_inline,
     exit_chat_inline,
     main_menu_kb,
     offer_select_inline,
@@ -448,8 +451,41 @@ def register(dp):
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
 
-    @dp.callback_query_handler(lambda c: c.data.startswith("choose_offer_"), state="*")
+    @dp.callback_query_handler(lambda c: c.data.startswith("choose_offer_") and not c.data.startswith("choose_offer_confirm_"), state="*")
     async def choose_offer_handler(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="client_choose_offer_preview",
+            limit=10,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
+        offer_id = int(call.data.split("_")[-1])
+        offer_full = await get_offer_full_row(offer_id)
+        if not offer_full:
+            await call.answer("Пропозицію не знайдено.", show_alert=True)
+            return
+
+        order = await get_order_row(int(offer_full["order_id"]))
+        if not order or order["user_id"] != call.from_user.id or order["status"] not in {"new", "offered"}:
+            await call.answer("Цю пропозицію вже не можна обрати.", show_alert=True)
+            return
+
+        await call.message.answer(
+            "❗ <b>Підтвердіть вибір майстра</b>\n\n"
+            f"👷 Майстер: <b>{offer_full['name']}</b>\n"
+            f"💰 Ціна: <b>{offer_full['price']}</b>\n"
+            f"⏱ Коли зможе: <b>{offer_full['eta']}</b>\n\n"
+            "Після підтвердження контакти відкриються вам і майстру.",
+            reply_markup=confirm_choose_offer_inline(offer_id),
+        )
+        await call.answer("Підтвердіть вибір")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("choose_offer_confirm_"), state="*")
+    async def choose_offer_confirm_handler(call: types.CallbackQuery, state: FSMContext):
         allowed = await allow_callback_action(
             call,
             action_key="client_choose_offer",
@@ -467,6 +503,11 @@ def register(dp):
             await call.answer("Не вдалося обрати цю пропозицію.", show_alert=True)
             return
 
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
         offer_full = await get_offer_full_row(offer_id)
         order_id = int(selected_offer["order_id"])
 
@@ -474,6 +515,14 @@ def register(dp):
             await share_contacts_after_choose(call, order_id, offer_full)
 
         await call.answer("Пропозицію обрано")
+
+    @dp.callback_query_handler(lambda c: c.data == "confirm_action_cancel", state="*")
+    async def confirm_action_cancel(call: types.CallbackQuery, state: FSMContext):
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await call.answer("Скасовано")
 
     @dp.callback_query_handler(lambda c: c.data.startswith("reopen_order_"), state="*")
     async def reopen_order_handler(call: types.CallbackQuery, state: FSMContext):
@@ -522,8 +571,46 @@ def register(dp):
 
         await call.answer("Готово")
 
-    @dp.callback_query_handler(lambda c: c.data.startswith("finish_order_"), state="*")
+    @dp.callback_query_handler(lambda c: c.data.startswith("finish_order_") and not c.data.startswith("finish_order_confirm_"), state="*")
     async def finish_order_handler(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="master_finish_order_preview",
+            limit=8,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
+        order_id = int(call.data.split("_")[-1])
+
+        order = await fetchrow(
+            """
+            SELECT *
+            FROM orders
+            WHERE id=$1
+              AND selected_master_id=$2
+              AND status = ANY($3::text[])
+            """,
+            order_id,
+            call.from_user.id,
+            ["matched", "in_progress"],
+        )
+        if not order:
+            await call.answer("Заявка недоступна для завершення.", show_alert=True)
+            return
+
+        await call.message.answer(
+            f"❗ <b>Підтвердіть завершення заявки #{order_id}</b>\n\n"
+            "Клієнту буде надіслано прохання оцінити вашу роботу.\n"
+            "Натискайте тільки якщо роботу справді виконано.",
+            reply_markup=confirm_finish_order_inline(order_id),
+        )
+        await call.answer("Підтвердіть дію")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("finish_order_confirm_"), state="*")
+    async def finish_order_confirm_handler(call: types.CallbackQuery, state: FSMContext):
         allowed = await allow_callback_action(
             call,
             action_key="master_finish_order",
@@ -557,6 +644,11 @@ def register(dp):
             await call.answer("Заявка вже змінилась або недоступна.", show_alert=True)
             return
 
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
         await call.message.answer(
             f"🏁 <b>Заявку #{order_id} завершено</b>",
             reply_markup=main_menu_kb(is_admin_user=is_admin(call.from_user.id)),
@@ -576,8 +668,45 @@ def register(dp):
 
         await call.answer("Заявку завершено")
 
-    @dp.callback_query_handler(lambda c: c.data.startswith("refuse_order_"), state="*")
+    @dp.callback_query_handler(lambda c: c.data.startswith("refuse_order_") and not c.data.startswith("refuse_order_confirm_"), state="*")
     async def refuse_order_handler(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="master_refuse_order",
+            limit=8,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
+        order_id = int(call.data.split("_")[-1])
+
+        order = await fetchrow(
+            """
+            SELECT *
+            FROM orders
+            WHERE id=$1
+              AND selected_master_id=$2
+              AND status = ANY($3::text[])
+            """,
+            order_id,
+            call.from_user.id,
+            ["matched", "in_progress"],
+        )
+        if not order:
+            await call.answer("Неможливо відмовитись від цієї заявки.", show_alert=True)
+            return
+
+        await call.message.answer(
+            f"❗ <b>Підтвердіть відмову від заявки #{order_id}</b>\n\n"
+            "Клієнту буде надіслано повідомлення, а заявка повернеться до інших пропозицій або нових заявок.",
+            reply_markup=confirm_refuse_order_inline(order_id),
+        )
+        await call.answer("Підтвердіть дію")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("refuse_order_confirm_"), state="*")
+    async def refuse_order_confirm_handler(call: types.CallbackQuery, state: FSMContext):
         allowed = await allow_callback_action(
             call,
             action_key="master_refuse_order",
@@ -608,6 +737,11 @@ def register(dp):
 
         await refuse_order(order_id)
 
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
         await call.message.answer(
             f"❌ <b>Ви відмовились від заявки #{order_id}</b>",
             reply_markup=main_menu_kb(is_admin_user=is_admin(call.from_user.id)),
@@ -633,17 +767,10 @@ def register(dp):
                 actual_status = updated_order["status"] if updated_order else "new"
                 client_markup = client_order_actions_inline(order_id, actual_status)
 
-            await dp.bot.send_message(
-                order["user_id"],
-                client_text,
-                reply_markup=client_markup,
-            )
+            await dp.bot.send_message(order["user_id"], client_text, reply_markup=client_markup)
 
             if active_offers:
-                await dp.bot.send_message(
-                    order["user_id"],
-                    f"📬 <b>Доступних пропозицій зараз:</b> {len(active_offers)}",
-                )
+                await dp.bot.send_message(order["user_id"], f"📬 <b>Доступних пропозицій зараз:</b> {len(active_offers)}")
 
         except Exception as e:
             logger.warning("Не вдалося повідомити клієнта про відмову по заявці %s: %s", order_id, e)
