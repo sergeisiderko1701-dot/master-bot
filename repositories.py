@@ -387,6 +387,7 @@ async def list_new_orders_for_master(category_value):
         FROM orders
         WHERE category = ANY($1::text[])
           AND status = ANY($2::text[])
+          AND moderation_status='approved'
         ORDER BY created_at DESC
         LIMIT 50
         """,
@@ -460,7 +461,7 @@ async def list_pending_masters(limit: int, offset: int):
         offset,
     )
     total = await fetchrow("SELECT COUNT(*) AS c FROM masters WHERE status='pending'")
-    return rows, int(total["c"])
+    return rows, int(total["c"] or 0)
 
 
 async def list_admin_masters(limit: int, offset: int):
@@ -480,7 +481,7 @@ async def list_admin_masters(limit: int, offset: int):
         "SELECT COUNT(*) AS c FROM masters WHERE status = ANY($1::text[])",
         ["approved", "blocked"],
     )
-    return rows, int(total["c"])
+    return rows, int(total["c"] or 0)
 
 
 # =========================
@@ -501,6 +502,39 @@ async def client_active_orders_count(user_id: int) -> int:
     return int(value or 0)
 
 
+async def get_recent_client_order_count(user_id: int, seconds: int = 3600) -> int:
+    threshold = now_ts() - seconds
+    value = await fetchval(
+        """
+        SELECT COUNT(*)
+        FROM orders
+        WHERE user_id=$1
+          AND created_at >= $2
+        """,
+        user_id,
+        threshold,
+    )
+    return int(value or 0)
+
+
+async def has_duplicate_recent_problem(user_id: int, problem: str, days: int = 7) -> bool:
+    threshold = now_ts() - (days * 24 * 60 * 60)
+    value = await fetchval(
+        """
+        SELECT 1
+        FROM orders
+        WHERE user_id=$1
+          AND LOWER(TRIM(problem)) = LOWER(TRIM($2))
+          AND created_at >= $3
+        LIMIT 1
+        """,
+        user_id,
+        problem,
+        threshold,
+    )
+    return bool(value)
+
+
 async def create_order(
     user_id: int,
     category: str,
@@ -509,15 +543,36 @@ async def create_order(
     media_type: Optional[str] = None,
     media_file_id: Optional[str] = None,
     client_phone: Optional[str] = None,
+    is_suspect: bool = False,
+    suspicion_score: int = 0,
+    suspicion_reasons: Optional[str] = None,
+    moderation_status: str = "approved",
 ) -> int:
     ts = now_ts()
     row = await fetchrow(
         """
         INSERT INTO orders(
-            user_id, category, district, problem, client_phone,
-            media_type, media_file_id, status, created_at, updated_at
+            user_id,
+            category,
+            district,
+            problem,
+            client_phone,
+            media_type,
+            media_file_id,
+            status,
+            is_suspect,
+            suspicion_score,
+            suspicion_reasons,
+            moderation_status,
+            created_at,
+            updated_at
         )
-        VALUES($1, $2, $3, $4, $5, $6, $7, 'new', $8, $8)
+        VALUES(
+            $1, $2, $3, $4, $5, $6, $7,
+            'new',
+            $8, $9, $10, $11,
+            $12, $12
+        )
         RETURNING id
         """,
         user_id,
@@ -527,6 +582,10 @@ async def create_order(
         client_phone,
         media_type,
         media_file_id,
+        is_suspect,
+        suspicion_score,
+        suspicion_reasons,
+        moderation_status,
         ts,
     )
     order_id = int(row["id"])
@@ -538,7 +597,10 @@ async def create_order(
         to_status="new",
         actor_user_id=user_id,
         actor_role="client",
-        payload=f"category={category};district={district or ''}",
+        payload=(
+            f"category={category};district={district or ''};"
+            f"is_suspect={int(bool(is_suspect))};moderation_status={moderation_status}"
+        ),
     )
 
     return order_id
@@ -577,7 +639,127 @@ async def list_admin_orders(limit: int, offset: int, status_filter: Optional[str
             offset,
         )
         total = await fetchrow("SELECT COUNT(*) AS c FROM orders")
-    return rows, int(total["c"])
+    return rows, int(total["c"] or 0)
+
+
+async def list_suspicious_orders(limit: int = 20, offset: int = 0):
+    rows = await fetch(
+        """
+        SELECT *
+        FROM orders
+        WHERE moderation_status='pending_review'
+        ORDER BY created_at DESC, id DESC
+        LIMIT $1 OFFSET $2
+        """,
+        limit,
+        offset,
+    )
+    total = await fetchrow(
+        """
+        SELECT COUNT(*) AS c
+        FROM orders
+        WHERE moderation_status='pending_review'
+        """
+    )
+    return rows, int(total["c"] or 0)
+
+
+async def approve_suspicious_order(order_id: int, admin_user_id: int):
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            order = await conn.fetchrow(
+                """
+                SELECT *
+                FROM orders
+                WHERE id=$1
+                  AND moderation_status='pending_review'
+                FOR UPDATE
+                """,
+                order_id,
+            )
+            if not order:
+                return None
+
+            await conn.execute(
+                """
+                UPDATE orders
+                SET moderation_status='approved',
+                    updated_at=$1
+                WHERE id=$2
+                """,
+                now_ts(),
+                order_id,
+            )
+
+    await add_order_event(
+        order_id=order_id,
+        event_type="order_approved_by_admin",
+        from_status=order["status"],
+        to_status=order["status"],
+        actor_user_id=admin_user_id,
+        actor_role="admin",
+        payload="moderation_status=approved",
+    )
+
+    return await get_order_row(order_id)
+
+
+async def reject_suspicious_order(order_id: int, admin_user_id: int):
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            order = await conn.fetchrow(
+                """
+                SELECT *
+                FROM orders
+                WHERE id=$1
+                  AND moderation_status='pending_review'
+                FOR UPDATE
+                """,
+                order_id,
+            )
+            if not order:
+                return None
+
+            await conn.execute(
+                """
+                UPDATE orders
+                SET moderation_status='rejected',
+                    status='cancelled',
+                    updated_at=$1
+                WHERE id=$2
+                """,
+                now_ts(),
+                order_id,
+            )
+
+            await conn.execute(
+                """
+                UPDATE offers
+                SET status='rejected'
+                WHERE order_id=$1
+                  AND status='active'
+                """,
+                order_id,
+            )
+
+            await conn.execute(
+                "UPDATE chats SET status='closed' WHERE order_id=$1",
+                order_id,
+            )
+
+    await add_order_event(
+        order_id=order_id,
+        event_type="order_rejected_as_suspect",
+        from_status=order["status"],
+        to_status="cancelled",
+        actor_user_id=admin_user_id,
+        actor_role="admin",
+        payload="moderation_status=rejected",
+    )
+
+    return await get_order_row(order_id)
 
 
 async def set_order_status(order_id: int, status: str, selected_master_id=None):
@@ -877,7 +1059,7 @@ async def admin_stats():
     data = {}
     for key, query in keys.items():
         row = await fetchrow(query)
-        data[key] = int(row["c"])
+        data[key] = int(row["c"] or 0)
     return data
 
 
@@ -901,6 +1083,7 @@ async def create_offer(
                 FROM orders
                 WHERE id=$1
                   AND status = ANY($2::text[])
+                  AND moderation_status='approved'
                 FOR UPDATE
                 """,
                 order_id,
