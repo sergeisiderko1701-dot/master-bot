@@ -262,13 +262,9 @@ def _event_actor_text(actor_role: str, actor_user_id) -> str:
     return actor_role or "system"
 
 
-def _funnel_title_by_period(label: str) -> str:
-    return f"📈 <b>Воронка заявок — {label}</b>"
-
-
 def _funnel_text(label: str, stats: dict) -> str:
     return (
-        f"{_funnel_title_by_period(label)}\n\n"
+        f"📈 <b>Воронка заявок — {label}</b>\n\n"
         f"📝 Створено: <b>{stats['total_orders']}</b>\n"
         f"📬 Є оффери: <b>{stats['with_offers']}</b>\n"
         f"🤝 Обрано майстра: <b>{stats['matched']}</b>\n"
@@ -490,9 +486,7 @@ def register(dp):
 
                 status_line = ""
                 if ev["from_status"] or ev["to_status"]:
-                    status_line = (
-                        f"\n   └ статус: {ev['from_status'] or '—'} → {ev['to_status'] or '—'}"
-                    )
+                    status_line = f"\n   └ статус: {ev['from_status'] or '—'} → {ev['to_status'] or '—'}"
 
                 payload_text = _event_payload_text(ev["payload"])
                 if payload_text:
@@ -748,9 +742,9 @@ def register(dp):
             f"🛠 В роботі: <b>{stats['orders_progress']}</b>\n"
             f"✅ Завершені: <b>{stats['orders_done']}</b>\n"
             f"❌ Скасовані: <b>{stats['orders_cancelled']}</b>\n"
-            f"⌛ Прострочені: <b>{stats['orders_expired']}</b>",
-            reply_markup=admin_menu_kb(),
+            f"⌛ Прострочені: <b>{stats['orders_expired']}</b>"
         )
+        await message.answer(text, reply_markup=admin_menu_kb())
 
     @dp.message_handler(lambda m: m.text == "📊 Статистика", state="*")
     async def admin_statistics(message: types.Message, state: FSMContext):
