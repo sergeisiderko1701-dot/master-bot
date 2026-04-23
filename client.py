@@ -268,6 +268,13 @@ def register(dp):
                 reply_markup=request_contact_kb(),
             )
             return
+        if message.contact.user_id and message.contact.user_id != message.from_user.id:
+            await message.answer(
+                "Будь ласка, надішліть саме <b>свій</b> номер кнопкою <b>📲 Поділитися номером</b>.",
+                reply_markup=request_contact_kb(),
+            )
+            return
+
 
         phone = normalize_phone(message.contact.phone_number)
 
@@ -569,7 +576,7 @@ def register(dp):
             return
 
         try:
-            await cancel_order(order_id)
+            await cancel_order(order_id, call.from_user.id)
             logger.info(
                 "CLIENT CANCEL SUCCESS user_id=%s order_id=%s",
                 call.from_user.id,
