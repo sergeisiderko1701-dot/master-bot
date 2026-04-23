@@ -16,6 +16,7 @@ from config import settings
 from constants import status_label
 from keyboards import main_menu_kb
 from repositories import (
+    admin_funnel_stats,
     admin_stats,
     close_chat,
     delete_master_by_id,
@@ -59,6 +60,12 @@ STATUS_FILTER_MAP = {
     "⌛ Прострочені": "expired",
 }
 
+FUNNEL_PERIOD_MAP = {
+    "📅 За день": 24 * 60 * 60,
+    "🗓 За 7 днів": 7 * 24 * 60 * 60,
+    "🗓 За 30 днів": 30 * 24 * 60 * 60,
+    "🧾 За весь час": None,
+}
 
 EVENT_TYPE_LABELS = {
     "order_created": "🆕 Заявку створено",
@@ -82,11 +89,12 @@ def _reply_kb(rows):
 
 def admin_menu_kb():
     return _reply_kb([
-        ["📊 Статистика", "📦 Заявки"],
+        ["📊 Статистика", "📈 Воронка"],
+        ["📦 Заявки", "📦 Завислі заявки"],
         ["🔎 Пошук заявки", "🔎 Пошук користувача"],
-        ["🔎 Пошук майстра", "📦 Завислі заявки"],
-        ["📝 Модерація майстрів", "👷 Майстри"],
-        ["⚠️ Скарги", "📣 СМС розсилка"],
+        ["🔎 Пошук майстра", "📝 Модерація майстрів"],
+        ["👷 Майстри", "⚠️ Скарги"],
+        ["📣 СМС розсилка"],
         ["⬅️ Назад", "🏠 У меню"],
     ])
 
@@ -106,6 +114,14 @@ def admin_broadcast_menu_kb():
     return _reply_kb([
         ["📣 Всім"],
         ["📣 Майстрам", "📣 Клієнтам"],
+        ["⬅️ Назад", "🏠 У меню"],
+    ])
+
+
+def admin_funnel_menu_kb():
+    return _reply_kb([
+        ["📅 За день", "🗓 За 7 днів"],
+        ["🗓 За 30 днів", "🧾 За весь час"],
         ["⬅️ Назад", "🏠 У меню"],
     ])
 
@@ -244,6 +260,31 @@ def _event_actor_text(actor_role: str, actor_user_id) -> str:
     if actor_user_id:
         return f"{actor_role or 'user'}:{actor_user_id}"
     return actor_role or "system"
+
+
+def _funnel_title_by_period(label: str) -> str:
+    return f"📈 <b>Воронка заявок — {label}</b>"
+
+
+def _funnel_text(label: str, stats: dict) -> str:
+    return (
+        f"{_funnel_title_by_period(label)}\n\n"
+        f"📝 Створено: <b>{stats['total_orders']}</b>\n"
+        f"📬 Є оффери: <b>{stats['with_offers']}</b>\n"
+        f"🤝 Обрано майстра: <b>{stats['matched']}</b>\n"
+        f"🛠 В роботі: <b>{stats['in_progress']}</b>\n"
+        f"✅ Завершено: <b>{stats['done']}</b>\n"
+        f"⭐ Оцінено: <b>{stats['rated']}</b>\n\n"
+        f"Втрати:\n"
+        f"❌ Скасовано: <b>{stats['cancelled']}</b>\n"
+        f"⌛ Expired: <b>{stats['expired']}</b>\n"
+        f"🔄 Повторно відкрито: <b>{stats['reopened']}</b>\n\n"
+        f"Конверсія:\n"
+        f"📬 Створено → оффери: <b>{stats['conv_offers_from_total']}%</b>\n"
+        f"🤝 Оффери → вибір: <b>{stats['conv_matched_from_offers']}%</b>\n"
+        f"✅ Вибір → завершення: <b>{stats['conv_done_from_matched']}%</b>\n"
+        f"⭐ Завершено → оцінка: <b>{stats['conv_rated_from_done']}%</b>"
+    )
 
 
 async def _safe_disable_markup(message: types.Message):
@@ -707,15 +748,39 @@ def register(dp):
             f"🛠 В роботі: <b>{stats['orders_progress']}</b>\n"
             f"✅ Завершені: <b>{stats['orders_done']}</b>\n"
             f"❌ Скасовані: <b>{stats['orders_cancelled']}</b>\n"
-            f"⌛ Прострочені: <b>{stats['orders_expired']}</b>"
+            f"⌛ Прострочені: <b>{stats['orders_expired']}</b>",
+            reply_markup=admin_menu_kb(),
         )
-        await message.answer(text, reply_markup=admin_menu_kb())
 
     @dp.message_handler(lambda m: m.text == "📊 Статистика", state="*")
     async def admin_statistics(message: types.Message, state: FSMContext):
         if not is_admin(message.from_user.id):
             return
         await admin_statistics_command(message, state)
+
+    @dp.message_handler(lambda m: m.text == "📈 Воронка", state="*")
+    async def admin_funnel_menu(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        await state.finish()
+        await message.answer(
+            "📈 <b>Воронка заявок</b>\n\nОберіть період:",
+            reply_markup=admin_funnel_menu_kb(),
+        )
+
+    @dp.message_handler(lambda m: m.text in FUNNEL_PERIOD_MAP.keys(), state="*")
+    async def admin_funnel_show(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+
+        label = message.text
+        period_seconds = FUNNEL_PERIOD_MAP[label]
+        stats = await admin_funnel_stats(period_seconds)
+
+        await message.answer(
+            _funnel_text(label, stats),
+            reply_markup=admin_funnel_menu_kb(),
+        )
 
     @dp.message_handler(lambda m: m.text == "📣 СМС розсилка", state="*")
     async def broadcast_menu(message: types.Message, state: FSMContext):
