@@ -210,3 +210,38 @@ def support_reply_inline(user_id: int):
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("↩️ Відповісти", callback_data=f"support_reply_{user_id}"))
     return kb
+
+def confirm_choose_offer_inline(offer_id: int):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("✅ Так, обрати майстра", callback_data=f"choose_offer_confirm_{offer_id}"))
+    kb.add(InlineKeyboardButton("⬅️ Повернутись до пропозицій", callback_data="confirm_action_cancel"))
+    return kb
+
+
+def confirm_client_cancel_inline(order_id: int):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("✅ Так, скасувати заявку", callback_data=f"client_cancel_confirm_{order_id}"))
+    kb.add(InlineKeyboardButton("⬅️ Не скасовувати", callback_data="confirm_action_cancel"))
+    return kb
+
+
+def confirm_finish_order_inline(order_id: int):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("✅ Так, завершити заявку", callback_data=f"finish_order_confirm_{order_id}"))
+    kb.add(InlineKeyboardButton("⬅️ Не завершувати", callback_data="confirm_action_cancel"))
+    return kb
+
+
+def confirm_refuse_order_inline(order_id: int):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("✅ Так, відмовитись", callback_data=f"refuse_order_confirm_{order_id}"))
+    kb.add(InlineKeyboardButton("⬅️ Не відмовлятись", callback_data="confirm_action_cancel"))
+    return kb
+
+
+def confirm_order_submit_inline():
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("✅ Відправити заявку", callback_data="client_order_submit_confirm"))
+    kb.add(InlineKeyboardButton("✏️ Заповнити заново", callback_data="client_order_submit_edit"))
+    kb.add(InlineKeyboardButton("❌ Скасувати", callback_data="client_order_submit_cancel"))
+    return kb
