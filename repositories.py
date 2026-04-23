@@ -795,16 +795,38 @@ async def set_order_status(order_id: int, status: str, selected_master_id=None):
     )
 
 
-async def cancel_order(order_id: int):
+async def cancel_order(order_id: int, client_user_id: Optional[int] = None):
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            order = await conn.fetchrow(
-                "SELECT * FROM orders WHERE id=$1 FOR UPDATE",
-                order_id,
-            )
+            if client_user_id is None:
+                order = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM orders
+                    WHERE id=$1
+                      AND status = ANY($2::text[])
+                    FOR UPDATE
+                    """,
+                    order_id,
+                    ["new", "offered", "matched"],
+                )
+            else:
+                order = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM orders
+                    WHERE id=$1
+                      AND user_id=$2
+                      AND status = ANY($3::text[])
+                    FOR UPDATE
+                    """,
+                    order_id,
+                    client_user_id,
+                    ["new", "offered", "matched"],
+                )
             if not order:
-                return
+                return None
 
             await conn.execute(
                 "UPDATE orders SET status='cancelled', updated_at=$1 WHERE id=$2",
@@ -830,6 +852,7 @@ async def cancel_order(order_id: int):
         payload=None,
     )
 
+    return order
 
 async def refuse_order(order_id: int):
     pool = get_pool()
@@ -1009,16 +1032,38 @@ async def reopen_order_by_client(order_id: int, client_user_id: int):
     return updated_order
 
 
-async def finish_order(order_id: int):
+async def finish_order(order_id: int, master_user_id: Optional[int] = None):
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            order = await conn.fetchrow(
-                "SELECT * FROM orders WHERE id=$1 FOR UPDATE",
-                order_id,
-            )
+            if master_user_id is None:
+                order = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM orders
+                    WHERE id=$1
+                      AND status = ANY($2::text[])
+                    FOR UPDATE
+                    """,
+                    order_id,
+                    ["matched", "in_progress"],
+                )
+            else:
+                order = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM orders
+                    WHERE id=$1
+                      AND selected_master_id=$2
+                      AND status = ANY($3::text[])
+                    FOR UPDATE
+                    """,
+                    order_id,
+                    master_user_id,
+                    ["matched", "in_progress"],
+                )
             if not order:
-                return
+                return None
 
             await conn.execute(
                 "UPDATE orders SET status='done', updated_at=$1 WHERE id=$2",
@@ -1040,6 +1085,7 @@ async def finish_order(order_id: int):
         payload=None,
     )
 
+    return order
 
 async def admin_stats():
     keys = {
@@ -1118,6 +1164,7 @@ async def create_offer(
                     created_at
                 )
                 VALUES ($1,$2,$3,$4,$5,'active',$6)
+                ON CONFLICT (order_id, master_user_id) DO NOTHING
                 RETURNING id
                 """,
                 order_id,
@@ -1127,6 +1174,9 @@ async def create_offer(
                 comment,
                 now_ts(),
             )
+
+            if not row:
+                return None
 
             previous_status = order["status"]
 
