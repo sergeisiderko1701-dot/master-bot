@@ -84,6 +84,152 @@ async def add_order_event(
 
 
 # =========================
+# ADMIN FUNNEL
+# =========================
+
+async def admin_funnel_stats(period_seconds: Optional[int] = None):
+    """
+    Воронка по заявках, створених за період.
+    Якщо period_seconds=None -> весь час.
+    """
+    threshold = now_ts() - period_seconds if period_seconds else None
+
+    where_clause = ""
+    args = []
+
+    if threshold is not None:
+        where_clause = "WHERE created_at >= $1"
+        args = [threshold]
+
+    total_row = await fetchrow(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM orders
+        {where_clause}
+        """,
+        *args,
+    )
+    total_orders = int(total_row["c"] or 0)
+
+    with_offers_row = await fetchrow(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM orders o
+        WHERE EXISTS (
+            SELECT 1
+            FROM offers f
+            WHERE f.order_id = o.id
+        )
+        {"AND o.created_at >= $1" if threshold is not None else ""}
+        """,
+        *args,
+    )
+    with_offers = int(with_offers_row["c"] or 0)
+
+    matched_row = await fetchrow(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM orders
+        WHERE (
+            status IN ('matched', 'in_progress', 'done')
+            OR selected_master_id IS NOT NULL
+        )
+        {"AND created_at >= $1" if threshold is not None else ""}
+        """,
+        *args,
+    )
+    matched = int(matched_row["c"] or 0)
+
+    in_progress_row = await fetchrow(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM orders
+        WHERE status='in_progress'
+        {"AND created_at >= $1" if threshold is not None else ""}
+        """,
+        *args,
+    )
+    in_progress = int(in_progress_row["c"] or 0)
+
+    done_row = await fetchrow(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM orders
+        WHERE status='done'
+        {"AND created_at >= $1" if threshold is not None else ""}
+        """,
+        *args,
+    )
+    done = int(done_row["c"] or 0)
+
+    rated_row = await fetchrow(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM orders
+        WHERE rating IS NOT NULL
+        {"AND created_at >= $1" if threshold is not None else ""}
+        """,
+        *args,
+    )
+    rated = int(rated_row["c"] or 0)
+
+    cancelled_row = await fetchrow(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM orders
+        WHERE status='cancelled'
+        {"AND created_at >= $1" if threshold is not None else ""}
+        """,
+        *args,
+    )
+    cancelled = int(cancelled_row["c"] or 0)
+
+    expired_row = await fetchrow(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM orders
+        WHERE status='expired'
+        {"AND created_at >= $1" if threshold is not None else ""}
+        """,
+        *args,
+    )
+    expired = int(expired_row["c"] or 0)
+
+    reopened_row = await fetchrow(
+        f"""
+        SELECT COUNT(DISTINCT e.order_id) AS c
+        FROM order_events e
+        JOIN orders o ON o.id = e.order_id
+        WHERE e.event_type='order_reopened_by_client'
+        {"AND o.created_at >= $1" if threshold is not None else ""}
+        """,
+        *args,
+    )
+    reopened = int(reopened_row["c"] or 0)
+
+    def _pct(a: int, b: int) -> float:
+        if b <= 0:
+            return 0.0
+        return round((a / b) * 100, 1)
+
+    return {
+        "total_orders": total_orders,
+        "with_offers": with_offers,
+        "matched": matched,
+        "in_progress": in_progress,
+        "done": done,
+        "rated": rated,
+        "cancelled": cancelled,
+        "expired": expired,
+        "reopened": reopened,
+        "conv_offers_from_total": _pct(with_offers, total_orders),
+        "conv_matched_from_offers": _pct(matched, with_offers),
+        "conv_done_from_matched": _pct(done, matched),
+        "conv_rated_from_done": _pct(rated, done),
+    }
+
+
+# =========================
 # SPAM LOGS
 # =========================
 
