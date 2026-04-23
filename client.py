@@ -5,6 +5,7 @@ from aiogram import types
 from aiogram.dispatcher import FSMContext
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
+from anti_fake import evaluate_order_antifake
 from config import settings
 from constants import CATEGORY_LABEL_TO_VALUE
 from keyboards import (
@@ -21,6 +22,8 @@ from repositories import (
     create_order,
     get_cooldown,
     get_order_row,
+    get_recent_client_order_count,
+    has_duplicate_recent_problem,
     list_approved_masters_for_category,
     list_client_orders,
     list_order_offers,
@@ -36,6 +39,7 @@ from ui_texts import (
     choose_category_text,
     client_actions_text,
     order_created_text,
+    order_sent_to_review_text,
     tip_after_category,
     tip_before_submit,
     tip_choose_master,
@@ -265,13 +269,6 @@ def register(dp):
             )
             return
 
-        if message.contact.user_id != message.from_user.id:
-            await message.answer(
-                "Будь ласка, надішліть саме <b>свій</b> номер кнопкою <b>📲 Поділитися номером</b>.",
-                reply_markup=request_contact_kb(),
-            )
-            return
-
         phone = normalize_phone(message.contact.phone_number)
 
         if not is_valid_phone(phone):
@@ -359,6 +356,24 @@ def register(dp):
             )
             return
 
+        recent_orders_count = await get_recent_client_order_count(message.from_user.id, 3600)
+        duplicate_problem = await has_duplicate_recent_problem(
+            message.from_user.id,
+            data.get("problem", ""),
+            7,
+        )
+
+        has_media = bool(media_file_id)
+        antifake = evaluate_order_antifake(
+            problem=data.get("problem", ""),
+            phone=data.get("client_phone", ""),
+            recent_orders_count=recent_orders_count,
+            duplicate_problem=duplicate_problem,
+            has_media=has_media,
+        )
+
+        moderation_status = "pending_review" if antifake.is_suspect else "approved"
+
         order_id = await create_order(
             user_id=message.from_user.id,
             category=data["client_category"],
@@ -367,6 +382,10 @@ def register(dp):
             media_type=media_type,
             media_file_id=media_file_id,
             client_phone=data.get("client_phone"),
+            is_suspect=antifake.is_suspect,
+            suspicion_score=antifake.score,
+            suspicion_reasons="\n".join(antifake.reasons) if antifake.reasons else None,
+            moderation_status=moderation_status,
         )
 
         await set_cooldown(
@@ -376,23 +395,54 @@ def register(dp):
         )
 
         order_row = await get_order_row(order_id)
-        masters = await list_approved_masters_for_category(data["client_category"])
 
-        logger.info("ORDER ID=%s CATEGORY=%s", order_id, data["client_category"])
-        logger.info("FILTERED MASTERS FOR ORDER=%s", len(masters))
+        logger.info(
+            "ORDER CREATED id=%s category=%s suspect=%s score=%s moderation=%s",
+            order_id,
+            data["client_category"],
+            antifake.is_suspect,
+            antifake.score,
+            moderation_status,
+        )
 
         try:
             await notify_admin_about_order(dp.bot, settings.admin_id, order_row)
         except Exception as e:
             logger.warning("Помилка повідомлення адміну по заявці %s: %s", order_id, e)
 
+        await state.finish()
+        await state.update_data(client_category=data["client_category"])
+
+        if antifake.is_suspect:
+            try:
+                reasons_text = "\n".join(f"• {item}" for item in antifake.reasons) if antifake.reasons else "• автоматична перевірка"
+                await dp.bot.send_message(
+                    settings.admin_id,
+                    (
+                        f"🕵️ <b>Нова підозріла заявка</b>\n\n"
+                        f"🆔 #{order_id}\n"
+                        f"👤 user_id: <code>{message.from_user.id}</code>\n"
+                        f"📞 Телефон: {data.get('client_phone') or '—'}\n"
+                        f"📝 Проблема: {data.get('problem') or '—'}\n\n"
+                        f"⚠️ Причини:\n{reasons_text}"
+                    ),
+                )
+            except Exception as e:
+                logger.warning("Помилка повідомлення адміну про підозрілу заявку %s: %s", order_id, e)
+
+            await message.answer(
+                order_sent_to_review_text(order_id, antifake.reasons),
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
+
+        masters = await list_approved_masters_for_category(data["client_category"])
+        logger.info("FILTERED MASTERS FOR ORDER=%s -> %s", order_id, len(masters))
+
         try:
             await notify_masters_about_order(dp.bot, order_row, masters)
         except Exception as e:
             logger.warning("Помилка розсилки майстрам по заявці %s: %s", order_id, e)
-
-        await state.finish()
-        await state.update_data(client_category=data["client_category"])
 
         await message.answer(
             order_created_text(),
