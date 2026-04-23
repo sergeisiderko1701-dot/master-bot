@@ -1,9 +1,11 @@
+import asyncio
 import logging
 from aiogram import Bot
 
 from constants import category_label, status_label
 from keyboards import admin_order_actions_inline, order_card_master_actions
 from repositories import execute, get_chat_for_order, get_master_name
+from utils import now_ts
 from ui_texts import master_card_text
 
 
@@ -28,10 +30,11 @@ async def clear_broken_order_media(order_id: int):
             UPDATE orders
             SET media_type=NULL,
                 media_file_id=NULL,
-                updated_at=COALESCE(updated_at, 0)
+                updated_at=$2
             WHERE id=$1
             """,
             order_id,
+            now_ts(),
         )
         logger.warning("Broken media cleared for order %s", order_id)
     except Exception as e:
@@ -232,6 +235,7 @@ async def notify_masters_about_order(bot: Bot, order_row, masters):
                 "Натисніть <b>📨 Відгукнутись</b>, якщо хочете взяти цю заявку в роботу.",
             )
             sent_count += 1
+            await asyncio.sleep(0.05)
         except Exception as e:
             logger.warning("Помилка повідомлення майстру %s: %s", master_user_id, e)
 
