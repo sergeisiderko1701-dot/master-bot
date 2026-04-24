@@ -23,6 +23,26 @@ def back_menu_kb():
     return kb
 
 
+def skip_photo_kb():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row(KeyboardButton("➡️ Пропустити фото"))
+    kb.row(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
+    return kb
+
+
+def skip_comment_kb():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row(KeyboardButton("➡️ Пропустити коментар"))
+    kb.row(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
+    return kb
+
+
+def skip_review_kb():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row(KeyboardButton("➡️ Пропустити відгук"))
+    kb.row(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
+    return kb
+
 def main_menu_kb(is_admin_user: bool = False):
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row(KeyboardButton("👤 Знайти майстра"), KeyboardButton("🔧 Я майстер"))
