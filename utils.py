@@ -5,51 +5,23 @@ import time
 from config import settings
 
 
-_ZERO_WIDTH_SPACE = "\u200b"
+# Zero-width space used to break Telegram auto-link detection.
+_ZWSP = "\u200b"
 
 
-def neutralize_links(value: str) -> str:
-    """
-    Ламає автопосилання Telegram, але залишає текст читабельним.
+_LINK_PATTERNS = [
+    (re.compile(r"(?i)\b(https?)://"), lambda m: f"{m.group(1)}://{_ZWSP}"),
+    (re.compile(r"(?i)\bwww\."), lambda m: f"www.{_ZWSP}"),
+    (re.compile(r"(?i)\b(t\.me/)"), lambda m: f"t.{_ZWSP}me/"),
+    (re.compile(r"(?i)\b(telegram\.me/)"), lambda m: f"telegram.{_ZWSP}me/"),
+    (re.compile(r"(?i)\b(mailto:)"), lambda m: f"mailto:{_ZWSP}"),
+]
 
-    HTML escape захищає від <b>/<a>, але Telegram все одно може сам робити
-    клікабельними https://..., www..., email і @username. Тут ми додаємо
-    zero-width space у ключові місця.
-    """
-    if not value:
-        return value
 
-    text = str(value)
-
-    # https://example.com -> https://​example.com
-    text = re.sub(
-        r"(?i)\b(https?)://",
-        lambda m: f"{m.group(1)}://{_ZERO_WIDTH_SPACE}",
-        text,
-    )
-
-    # www.example.com -> www.​example.com
-    text = re.sub(
-        r"(?i)\bwww\.",
-        f"www.{_ZERO_WIDTH_SPACE}",
-        text,
-    )
-
-    # user@example.com -> user@​example.com
-    text = re.sub(
-        r"([A-Za-z0-9._%+\-]{1,64})@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})",
-        lambda m: f"{m.group(1)}@{_ZERO_WIDTH_SPACE}{m.group(2)}",
-        text,
-    )
-
-    # @username -> @​username
-    text = re.sub(
-        r"(?<!\w)@([A-Za-z0-9_]{3,32})",
-        lambda m: f"@{_ZERO_WIDTH_SPACE}{m.group(1)}",
-        text,
-    )
-
-    return text
+_EMAIL_RE = re.compile(
+    r"\b([A-Za-z0-9._%+\-]+)@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})\b"
+)
+_USERNAME_RE = re.compile(r"(?<!\w)@([A-Za-z0-9_]{3,32})")
 
 
 def now_ts() -> int:
@@ -60,17 +32,33 @@ def is_admin(user_id: int) -> bool:
     return user_id == settings.admin_id
 
 
+def neutralize_links(value: str) -> str:
+    """
+    Breaks Telegram auto-linking for URLs, emails and @usernames.
+    Keeps text readable, but prevents it from becoming clickable.
+    """
+    if value is None:
+        return ""
+
+    text = str(value)
+
+    for pattern, repl in _LINK_PATTERNS:
+        text = pattern.sub(repl, text)
+
+    text = _EMAIL_RE.sub(lambda m: f"{m.group(1)}@{_ZWSP}{m.group(2)}", text)
+    text = _USERNAME_RE.sub(lambda m: f"@{_ZWSP}{m.group(1)}", text)
+
+    return text
+
+
 def normalize_text(value, max_len: int = 1500) -> str:
     """
-    Очищає та нормалізує текст для збереження/подальшого показу в Telegram HTML.
-
-    Важливо:
-    - html.unescape() перед html.escape() прибирає проблему подвійного escape,
-      якщо текст уже був збережений як &lt;...&gt;.
-    - HTML-теги користувача завжди стають безпечним текстом.
-
-    Не ламаємо посилання тут, щоб не записувати zero-width символи в БД.
-    Посилання нейтралізуємо на етапі виводу через safe_str/safe_user_text.
+    Cleans user text for storing/using in Telegram HTML messages:
+    - converts to str
+    - trims and collapses spaces
+    - breaks Telegram auto-links
+    - escapes HTML
+    - truncates length
     """
     if value is None:
         return ""
@@ -80,19 +68,17 @@ def normalize_text(value, max_len: int = 1500) -> str:
         return ""
 
     value = " ".join(value.split())
-    value = html.escape(html.unescape(value), quote=True)
+    value = neutralize_links(value)
+    value = html.escape(value)
 
     return value[:max_len]
 
 
 def safe_str(value, default: str = "—") -> str:
     """
-    Безпечний текст для вставки в повідомлення Telegram з parse_mode='HTML'.
-
-    Використовуй для будь-якого тексту з БД, Telegram user object або введення користувача.
-    Не використовуй для власних HTML-шаблонів типу '<b>...</b>'.
-
-    Додатково ламає автопосилання Telegram: https://, www., email, @username.
+    Safe text for Telegram HTML output.
+    Escapes HTML but does not intentionally break plain links.
+    Use safe_user_text() for user-generated messages where links should not be clickable.
     """
     if value is None:
         return default
@@ -101,21 +87,29 @@ def safe_str(value, default: str = "—") -> str:
     if not value:
         return default
 
-    value = html.unescape(value)
-    value = neutralize_links(value)
-    return html.escape(value, quote=True)
+    return html.escape(value)
 
 
 def safe_user_text(value, default: str = "—") -> str:
     """
-    Явний alias для тексту від користувача: HTML escape + нейтралізація посилань.
+    Safe user-generated text for Telegram HTML output:
+    - breaks Telegram auto-links
+    - escapes HTML
     """
-    return safe_str(value, default)
+    if value is None:
+        return default
+
+    value = str(value).strip()
+    if not value:
+        return default
+
+    value = neutralize_links(value)
+    return html.escape(value)
 
 
 def safe_int(value, default: int = 0) -> int:
     """
-    Безпечне число.
+    Safe integer conversion.
     """
     try:
         return int(value)
