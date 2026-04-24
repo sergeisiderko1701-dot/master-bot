@@ -1,6 +1,6 @@
 from config import settings
 from constants import category_label, category_labels, master_status_label, status_label
-from utils import now_ts
+from utils import now_ts, safe_str
 
 
 def _rating_text(value) -> str:
@@ -8,6 +8,22 @@ def _rating_text(value) -> str:
         return f"{float(value or 0):.2f}"
     except (TypeError, ValueError):
         return "0.00"
+
+
+def _row_get(row, key, default=None):
+    try:
+        value = row[key]
+        return default if value is None else value
+    except Exception:
+        try:
+            value = row.get(key, default)
+            return default if value is None else value
+        except Exception:
+            return default
+
+
+def _safe_row(row, key, default="—") -> str:
+    return safe_str(_row_get(row, key, default), default)
 
 
 def _master_presence_text(master_row) -> str:
@@ -40,13 +56,7 @@ def _master_presence_text(master_row) -> str:
 
 
 def _verification_badge(row) -> str:
-    try:
-        status = row.get("verification_status")
-    except Exception:
-        try:
-            status = row["verification_status"]
-        except Exception:
-            status = None
+    status = _row_get(row, "verification_status")
 
     if status == "verified":
         return "✅ Досвід підтверджено"
@@ -94,7 +104,7 @@ def order_created_text() -> str:
 
 def order_sent_to_review_text(order_id: int, reasons: list[str]) -> str:
     return (
-        f"🛡 <b>Заявку #{order_id} прийнято</b>\n\n"
+        f"🛡 <b>Заявку #{int(order_id)} прийнято</b>\n\n"
         "Ми швидко перевіримо її перед публікацією.\n"
         "Після цього майстри зможуть відгукнутись."
     )
@@ -103,14 +113,14 @@ def order_sent_to_review_text(order_id: int, reasons: list[str]) -> str:
 def suspicious_order_admin_text(order_row) -> str:
     return (
         "🕵️ <b>Підозріла заявка</b>\n\n"
-        f"🆔 Заявка: <b>#{order_row['id']}</b>\n"
-        f"👤 Клієнт: <code>{order_row['user_id']}</code>\n"
-        f"🔧 Категорія: <b>{category_label(order_row['category'])}</b>\n"
-        f"📍 Район: {order_row['district'] or '—'}\n"
-        f"📞 Телефон: {order_row['client_phone'] or '—'}\n\n"
-        f"📝 <b>Проблема:</b>\n{order_row['problem'] or '—'}\n\n"
-        f"⚠️ <b>Причини:</b>\n{order_row['suspicion_reasons'] or '—'}\n"
-        f"📊 <b>Score:</b> {order_row['suspicion_score'] or 0}"
+        f"🆔 Заявка: <b>#{_row_get(order_row, 'id', '—')}</b>\n"
+        f"👤 Клієнт: <code>{safe_str(_row_get(order_row, 'user_id', '—'))}</code>\n"
+        f"🔧 Категорія: <b>{category_label(_row_get(order_row, 'category', ''))}</b>\n"
+        f"📍 Район: {_safe_row(order_row, 'district')}\n"
+        f"📞 Телефон: {_safe_row(order_row, 'client_phone')}\n\n"
+        f"📝 <b>Проблема:</b>\n{_safe_row(order_row, 'problem')}\n\n"
+        f"⚠️ <b>Причини:</b>\n{_safe_row(order_row, 'suspicion_reasons')}\n"
+        f"📊 <b>Score:</b> {_row_get(order_row, 'suspicion_score', 0) or 0}"
     )
 
 
@@ -154,64 +164,40 @@ def ask_media_text() -> str:
 
 
 def tip_after_category() -> str:
-    return (
-        "💡 <b>Порада</b>\n\n"
-        "Опишіть проблему конкретно — так майстри швидше дадуть ціну."
-    )
+    return "💡 <b>Порада</b>\n\nОпишіть проблему конкретно — так майстри швидше дадуть ціну."
 
 
 def tip_before_submit() -> str:
-    return (
-        "💡 <b>Порада</b>\n\n"
-        "Додайте фото — це допоможе майстру точніше оцінити роботу."
-    )
+    return "💡 <b>Порада</b>\n\nДодайте фото — це допоможе майстру точніше оцінити роботу."
 
 
 def tip_choose_master() -> str:
-    return (
-        "🔥 <b>Є пропозиції</b>\n\n"
-        "Порівняйте ціну, час і рейтинг — оберіть найкращий варіант 👇"
-    )
+    return "🔥 <b>Є пропозиції</b>\n\nПорівняйте ціну, час і рейтинг — оберіть найкращий варіант 👇"
 
 
 def tip_after_choose_master() -> str:
-    return (
-        "💬 <b>Що далі?</b>\n\n"
-        "Напишіть або зателефонуйте майстру, щоб домовитись про деталі."
-    )
+    return "💬 <b>Що далі?</b>\n\nНапишіть або зателефонуйте майстру, щоб домовитись про деталі."
 
 
 def tip_no_response() -> str:
-    return (
-        "💡 <b>Немає відповіді?</b>\n\n"
-        "Напишіть ще раз або оберіть іншого майстра."
-    )
+    return "💡 <b>Немає відповіді?</b>\n\nНапишіть ще раз або оберіть іншого майстра."
 
 
 def tip_reopen_order() -> str:
-    return (
-        "🔄 <b>Заявку знову відкрито</b>\n\n"
-        "Можете обрати іншого майстра або дочекатись нових пропозицій."
-    )
+    return "🔄 <b>Заявку знову відкрито</b>\n\nМожете обрати іншого майстра або дочекатись нових пропозицій."
 
 
 def tip_master_offer() -> str:
-    return (
-        "💡 <b>Порада</b>\n\n"
-        "Чітка ціна, реальний час і короткий коментар підвищують шанс, що вас оберуть."
-    )
+    return "💡 <b>Порада</b>\n\nЧітка ціна, реальний час і короткий коментар підвищують шанс, що вас оберуть."
 
 
 def tip_master_selected() -> str:
-    return (
-        "🚀 <b>Вас обрали!</b>\n\n"
-        "Зв’яжіться з клієнтом якнайшвидше."
-    )
+    return "🚀 <b>Вас обрали!</b>\n\nЗв’яжіться з клієнтом якнайшвидше."
 
 
 def no_offers_yet_text(order_id: int) -> str:
     return (
-        f"🔎 <b>Майстри дивляться заявку #{order_id}</b>\n\n"
+        f"🔎 <b>Майстри дивляться заявку #{int(order_id)}</b>\n\n"
         "Поки немає пропозицій.\n"
         "Зазвичай відповідають за <b>5–15 хв</b>.\n\n"
         "💡 Фото або точніший опис допоможуть швидше отримати відповідь."
@@ -219,68 +205,59 @@ def no_offers_yet_text(order_id: int) -> str:
 
 
 def offers_available_nudge_text(order_id_or_count: int | None = None, count: int | None = None) -> str:
-    # Backward compatible: supports both offers_available_nudge_text(count)
-    # and offers_available_nudge_text(order_id, count).
     actual_count = count if count is not None else order_id_or_count
-
     if actual_count:
-        return (
-            f"🔥 <b>Є пропозиції: {actual_count}</b>\n\n"
-            "Оберіть майстра, який підходить найкраще 👇"
-        )
-    return (
-        "🔥 <b>Є пропозиції</b>\n\n"
-        "Оберіть майстра, який підходить найкраще 👇"
-    )
+        return f"🔥 <b>Є пропозиції: {int(actual_count)}</b>\n\nОберіть майстра, який підходить найкраще 👇"
+    return "🔥 <b>Є пропозиції</b>\n\nОберіть майстра, який підходить найкраще 👇"
 
 
 def master_profile_text(master_row) -> str:
-    status_text = master_status_label(master_row["status"])
+    status_text = master_status_label(_row_get(master_row, "status", ""))
     presence = _master_presence_text(master_row)
 
     return (
         "👷 <b>Ваш профіль</b>\n\n"
-        f"👤 <b>{master_row['name']}</b>\n"
-        f"🔧 {category_labels(master_row['category'])}\n"
-        f"📍 {master_row['district'] or '—'}\n"
-        f"📞 {master_row['phone'] or '—'}\n"
+        f"👤 <b>{_safe_row(master_row, 'name')}</b>\n"
+        f"🔧 {category_labels(_row_get(master_row, 'category', ''))}\n"
+        f"📍 {_safe_row(master_row, 'district')}\n"
+        f"📞 {_safe_row(master_row, 'phone')}\n"
         f"{presence}\n\n"
-        f"⭐ <b>{_rating_text(master_row['rating'])}</b> · відгуків: <b>{master_row['reviews_count']}</b>\n"
+        f"⭐ <b>{_rating_text(_row_get(master_row, 'rating', 0))}</b> · відгуків: <b>{int(_row_get(master_row, 'reviews_count', 0) or 0)}</b>\n"
         f"✅ <b>Статус:</b> {status_text}\n"
         f"{_verification_badge(master_row)}\n\n"
-        f"🧾 <b>Про себе</b>\n{master_row['description'] or '—'}\n\n"
-        f"🛠 <b>Досвід</b>\n{master_row['experience'] or '—'}"
+        f"🧾 <b>Про себе</b>\n{_safe_row(master_row, 'description')}\n\n"
+        f"🛠 <b>Досвід</b>\n{_safe_row(master_row, 'experience')}"
     )
 
 
 def master_card_text(master_row, title: str = "👷 <b>Картка майстра</b>") -> str:
-    status_text = master_status_label(master_row["status"])
+    status_text = master_status_label(_row_get(master_row, "status", ""))
     presence = _master_presence_text(master_row)
 
     return (
         f"{title}\n\n"
-        f"👤 <b>{master_row['name']}</b>\n"
-        f"🔧 {category_labels(master_row['category'])}\n"
-        f"📍 {master_row['district'] or '—'}\n"
+        f"👤 <b>{_safe_row(master_row, 'name')}</b>\n"
+        f"🔧 {category_labels(_row_get(master_row, 'category', ''))}\n"
+        f"📍 {_safe_row(master_row, 'district')}\n"
         f"{presence}\n\n"
-        f"⭐ <b>{_rating_text(master_row['rating'])}</b> · відгуків: <b>{master_row['reviews_count']}</b>\n"
+        f"⭐ <b>{_rating_text(_row_get(master_row, 'rating', 0))}</b> · відгуків: <b>{int(_row_get(master_row, 'reviews_count', 0) or 0)}</b>\n"
         f"✅ <b>Статус:</b> {status_text}\n"
         f"{_verification_badge(master_row)}\n\n"
-        f"🧾 {master_row['description'] or '—'}\n\n"
-        f"📞 {master_row['phone'] or '—'}"
+        f"🧾 {_safe_row(master_row, 'description')}\n\n"
+        f"📞 {_safe_row(master_row, 'phone')}"
     )
 
 
 def order_card_text(order_row, title: str, master_name: str) -> str:
     return (
         f"{title}\n\n"
-        f"🆔 <b>Заявка #{order_row['id']}</b>\n"
-        f"🔧 <b>{category_label(order_row['category'])}</b>\n"
-        f"📍 {order_row['district'] or '—'}\n\n"
-        f"📝 {order_row['problem'] or '—'}\n\n"
-        f"📌 <b>Статус:</b> {status_label(order_row['status'])}\n"
-        f"👷 <b>Майстер:</b> {master_name or '—'}\n"
-        f"⭐ <b>Оцінка:</b> {order_row['rating'] if order_row['rating'] is not None else '—'}"
+        f"🆔 <b>Заявка #{_row_get(order_row, 'id', '—')}</b>\n"
+        f"🔧 <b>{category_label(_row_get(order_row, 'category', ''))}</b>\n"
+        f"📍 {_safe_row(order_row, 'district')}\n\n"
+        f"📝 {_safe_row(order_row, 'problem')}\n\n"
+        f"📌 <b>Статус:</b> {status_label(_row_get(order_row, 'status', ''))}\n"
+        f"👷 <b>Майстер:</b> {safe_str(master_name)}\n"
+        f"⭐ <b>Оцінка:</b> {_row_get(order_row, 'rating', '—') if _row_get(order_row, 'rating') is not None else '—'}"
     )
 
 
@@ -289,31 +266,25 @@ def offer_card_text(offer) -> str:
 
     return (
         "💼 <b>Пропозиція</b>\n\n"
-        f"👷 <b>{offer['name']}</b>\n"
+        f"👷 <b>{_safe_row(offer, 'name')}</b>\n"
         f"{presence}\n"
-        f"⭐ {_rating_text(offer['rating'])} · відгуків: {offer['reviews_count']}\n\n"
-        f"💰 <b>{offer['price']}</b>\n"
-        f"⏱ <b>{offer['eta']}</b>\n\n"
-        f"📝 {offer['comment'] or 'Без коментаря'}"
+        f"⭐ {_rating_text(_row_get(offer, 'rating', 0))} · відгуків: {int(_row_get(offer, 'reviews_count', 0) or 0)}\n\n"
+        f"💰 <b>{_safe_row(offer, 'price')}</b>\n"
+        f"⏱ <b>{_safe_row(offer, 'eta')}</b>\n\n"
+        f"📝 {_safe_row(offer, 'comment', 'Без коментаря')}"
     )
 
 
-def client_master_selected_text(
-    master_name: str,
-    phone: str,
-    rating=None,
-    reviews_count=None,
-    eta: str = None,
-) -> str:
+def client_master_selected_text(master_name: str, phone: str, rating=None, reviews_count=None, eta: str = None) -> str:
     rating_line = f"⭐ {_rating_text(rating)}" if rating is not None else ""
-    reviews_line = f" · {reviews_count} відгуків" if reviews_count is not None else ""
-    eta_line = f"\n⏱ {eta}" if eta else ""
+    reviews_line = f" · {int(reviews_count)} відгуків" if reviews_count is not None else ""
+    eta_line = f"\n⏱ {safe_str(eta)}" if eta else ""
     rating_block = f"{rating_line}{reviews_line}\n" if rating_line or reviews_line else ""
 
     return (
         "🎉 <b>Майстра обрано</b>\n\n"
-        f"👷 <b>{master_name}</b>\n"
-        f"📞 <b>{phone or '—'}</b>\n"
+        f"👷 <b>{safe_str(master_name)}</b>\n"
+        f"📞 <b>{safe_str(phone)}</b>\n"
         f"{rating_block}"
         f"{eta_line}\n\n"
         "💬 Напишіть або зателефонуйте, щоб домовитись про деталі."
@@ -322,7 +293,7 @@ def client_master_selected_text(
 
 def master_selected_for_master_text(order_id: int) -> str:
     return (
-        f"🚀 <b>Вас обрали за заявкою #{order_id}</b>\n\n"
+        f"🚀 <b>Вас обрали за заявкою #{int(order_id)}</b>\n\n"
         "Клієнт відкрив контакти.\n"
         "Зв’яжіться з ним якнайшвидше."
     )
@@ -330,7 +301,7 @@ def master_selected_for_master_text(order_id: int) -> str:
 
 def order_reopened_text(order_id: int) -> str:
     return (
-        f"🔄 <b>Заявку #{order_id} повторно відкрито</b>\n\n"
+        f"🔄 <b>Заявку #{int(order_id)} повторно відкрито</b>\n\n"
         "Попереднього майстра відключено.\n"
         "Можете обрати іншого або чекати нові пропозиції."
     )
@@ -338,60 +309,37 @@ def order_reopened_text(order_id: int) -> str:
 
 def chat_open_text(order_id: int, is_client: bool) -> str:
     if is_client:
-        return (
-            f"💬 <b>Чат по заявці #{order_id}</b>\n\n"
-            "Напишіть майстру повідомлення."
-        )
-    return (
-        f"💬 <b>Чат по заявці #{order_id}</b>\n\n"
-        "Напишіть клієнту повідомлення."
-    )
+        return f"💬 <b>Чат по заявці #{int(order_id)}</b>\n\nНапишіть майстру повідомлення."
+    return f"💬 <b>Чат по заявці #{int(order_id)}</b>\n\nНапишіть клієнту повідомлення."
 
 
 def chat_text_message(order_id: int, role: str, text: str) -> str:
     prefix = "👤 Клієнт" if role == "client" else "👷 Майстер"
-    return f"💬 <b>Заявка #{order_id}</b>\n{prefix}:\n{text}"
+    return f"💬 <b>Заявка #{int(order_id)}</b>\n{prefix}:\n{safe_str(text, '')}"
 
 
 def chat_media_caption(order_id: int, role: str, caption: str, icon: str) -> str:
     prefix = "👤 Клієнт" if role == "client" else "👷 Майстер"
-    base = f"{icon} <b>Заявка #{order_id}</b>\n{prefix}"
-    return f"{base}\n{caption}" if caption else base
+    base = f"{icon} <b>Заявка #{int(order_id)}</b>\n{prefix}"
+    return f"{base}\n{safe_str(caption, '')}" if caption else base
 
 
 def rating_intro(order_id: int) -> str:
-    return (
-        f"⭐ <b>Оцініть майстра</b>\n\n"
-        f"Заявка #{order_id}. Як пройшла робота?"
-    )
+    return f"⭐ <b>Оцініть майстра</b>\n\nЗаявка #{int(order_id)}. Як пройшла робота?"
 
 
 def rating_thanks() -> str:
-    return (
-        "✅ <b>Дякуємо!</b>\n\n"
-        "Ваш відгук допоможе іншим клієнтам."
-    )
+    return "✅ <b>Дякуємо!</b>\n\nВаш відгук допоможе іншим клієнтам."
+
 
 # =========================
 # PUBLIC MASTER BROWSING
 # =========================
 
-def _row_get(row, key, default=None):
-    try:
-        value = row[key]
-        return default if value is None else value
-    except Exception:
-        try:
-            value = row.get(key, default)
-            return default if value is None else value
-        except Exception:
-            return default
-
-
 def nearby_masters_intro_text(category: str, count: int) -> str:
     return (
         f"👷 <b>Майстри поруч: {category_label(category)}</b>\n\n"
-        f"Показуємо підтверджених майстрів у цій категорії: <b>{count}</b>.\n"
+        f"Показуємо підтверджених майстрів у цій категорії: <b>{int(count)}</b>.\n"
         "Контакти відкриваються тільки після створення заявки та вибору майстра."
     )
 
@@ -406,55 +354,47 @@ def no_nearby_masters_text(category: str) -> str:
 
 def public_master_card_text(master_row) -> str:
     presence = _master_presence_text(master_row)
-    name = _row_get(master_row, "name", "Майстер")
-    category = _row_get(master_row, "category", "")
-    district = _row_get(master_row, "district", "—")
     rating = _rating_text(_row_get(master_row, "rating", 0))
     reviews_count = int(_row_get(master_row, "reviews_count", 0) or 0)
-    description = _row_get(master_row, "description", "—")
 
     return (
-        f"👷 <b>{name}</b>\n"
+        f"👷 <b>{_safe_row(master_row, 'name', 'Майстер')}</b>\n"
         f"{presence}\n"
         f"⭐ {rating} · відгуків: {reviews_count}\n"
-        f"🔧 {category_labels(category)}\n"
-        f"📍 {district}\n\n"
-        f"🧾 {description}"
+        f"🔧 {category_labels(_row_get(master_row, 'category', ''))}\n"
+        f"📍 {_safe_row(master_row, 'district')}\n\n"
+        f"🧾 {_safe_row(master_row, 'description')}"
     )
 
 
 def public_master_profile_text(master_row, reviews=None) -> str:
     reviews = reviews or []
     presence = _master_presence_text(master_row)
-    name = _row_get(master_row, "name", "Майстер")
-    category = _row_get(master_row, "category", "")
-    district = _row_get(master_row, "district", "—")
     rating = _rating_text(_row_get(master_row, "rating", 0))
     reviews_count = int(_row_get(master_row, "reviews_count", 0) or 0)
-    description = _row_get(master_row, "description", "—")
-    experience = _row_get(master_row, "experience", "—")
 
     review_lines = []
     for item in reviews[:5]:
         review_rating = _row_get(item, "rating", "—")
         review_text = _row_get(item, "review_text", "")
         if review_text:
-            review_lines.append(f"⭐ {review_rating} — {review_text}")
+            review_lines.append(f"⭐ {review_rating} — {safe_str(review_text)}")
         else:
             review_lines.append(f"⭐ {review_rating} — без текстового відгуку")
 
     reviews_block = "\n".join(review_lines) if review_lines else "Поки немає текстових відгуків."
 
     return (
-        f"👷 <b>{name}</b>\n\n"
-        f"🔧 {category_labels(category)}\n"
-        f"📍 {district}\n"
+        f"👷 <b>{_safe_row(master_row, 'name', 'Майстер')}</b>\n\n"
+        f"🔧 {category_labels(_row_get(master_row, 'category', ''))}\n"
+        f"📍 {_safe_row(master_row, 'district')}\n"
         f"{presence}\n\n"
         f"⭐ <b>{rating}</b> · відгуків: <b>{reviews_count}</b>\n\n"
-        f"🧾 <b>Про майстра</b>\n{description}\n\n"
-        f"🛠 <b>Досвід</b>\n{experience}\n\n"
+        f"🧾 <b>Про майстра</b>\n{_safe_row(master_row, 'description')}\n\n"
+        f"🛠 <b>Досвід</b>\n{_safe_row(master_row, 'experience')}\n\n"
         f"📜 <b>Останні відгуки</b>\n{reviews_block}"
     )
+
 
 # Backward-compatible alias used by offer profile handlers.
 def master_public_profile_text(master_row, reviews=None) -> str:
