@@ -17,6 +17,7 @@ from keyboards import (
     master_menu_kb,
     order_card_master_actions,
     selected_order_master_actions,
+    skip_photo_kb,
 )
 from repositories import (
     approved_master_row,
@@ -48,7 +49,13 @@ PROFILE_FIELD_MAP = {
 }
 
 BACK_BUTTONS = {"⬅️ Назад", "Назад", "🔙 Назад"}
-SKIP_WORDS = {"пропустити", "skip", "-"}
+SKIP_WORDS = {
+    "пропустити",
+    "skip",
+    "-",
+    "➡️ пропустити",
+    "➡️ пропустити фото",
+}
 
 
 def normalize_phone(value: str) -> str:
@@ -80,7 +87,7 @@ def _validate_profile_field(field: str, message: types.Message):
     if field == "photo":
         value = message.photo[-1].file_id if message.photo else None
         if not value and (message.text or "").strip().lower() not in SKIP_WORDS:
-            return False, None, "Надішліть фото або напишіть 'пропустити'."
+            return False, None, "Надішліть фото або натисніть <b>➡️ Пропустити фото</b>."
         return True, value, None
 
     raw_text = message.text or ""
@@ -380,8 +387,8 @@ def register(dp):
         await MasterRegistration.photo.set()
         await message.answer(
             "📸 <b>Фото профілю</b>\n\n"
-            "Надішліть фото або напишіть <b>пропустити</b>.",
-            reply_markup=back_menu_kb(),
+            "Надішліть фото або натисніть <b>➡️ Пропустити фото</b>.",
+            reply_markup=skip_photo_kb(),
         )
 
     @dp.message_handler(state=MasterRegistration.phone, content_types=types.ContentTypes.TEXT)
@@ -408,8 +415,8 @@ def register(dp):
         await MasterRegistration.photo.set()
         await message.answer(
             "📸 <b>Фото профілю</b>\n\n"
-            "Надішліть фото або напишіть <b>пропустити</b>.",
-            reply_markup=back_menu_kb(),
+            "Надішліть фото або натисніть <b>➡️ Пропустити фото</b>.",
+            reply_markup=skip_photo_kb(),
         )
 
     @dp.message_handler(content_types=types.ContentTypes.ANY, state=MasterRegistration.photo)
@@ -419,8 +426,8 @@ def register(dp):
 
         if not photo and text not in SKIP_WORDS:
             await message.answer(
-                "Надішліть фото або напишіть 'пропустити'.",
-                reply_markup=back_menu_kb(),
+                "Надішліть фото або натисніть <b>➡️ Пропустити фото</b>.",
+                reply_markup=skip_photo_kb(),
             )
             return
 
@@ -505,8 +512,8 @@ def register(dp):
         await ProfileEdit.value.set()
 
         if field == "photo":
-            prompt = "Надішліть нове фото або напишіть 'пропустити':"
-            reply_markup = back_menu_kb()
+            prompt = "Надішліть нове фото або натисніть <b>➡️ Пропустити фото</b>."
+            reply_markup = skip_photo_kb()
         elif field == "phone":
             prompt = (
                 "📞 <b>Новий номер телефону</b>\n\n"
