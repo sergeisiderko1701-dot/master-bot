@@ -17,6 +17,8 @@ from keyboards import (
     offer_select_inline,
     rating_inline,
     selected_order_master_actions,
+    skip_comment_kb,
+    skip_review_kb,
 )
 from repositories import (
     add_complaint,
@@ -63,7 +65,14 @@ from utils import is_admin, normalize_text, now_ts
 logger = logging.getLogger(__name__)
 
 BACK_BUTTONS = {"⬅️ Назад", "Назад", "🔙 Назад"}
-SKIP_WORDS = {"пропустити", "skip", "-"}
+SKIP_WORDS = {
+    "пропустити",
+    "skip",
+    "-",
+    "➡️ пропустити",
+    "➡️ пропустити коментар",
+    "➡️ пропустити відгук",
+}
 
 
 def register(dp):
@@ -357,8 +366,8 @@ def register(dp):
         await OfferCreate.comment.set()
         await message.answer(
             "📝 <b>Коментар</b>\n\n"
-            "Напишіть короткий коментар або <b>пропустити</b>.",
-            reply_markup=back_menu_kb(),
+            "Напишіть короткий коментар або натисніть <b>➡️ Пропустити коментар</b>.",
+            reply_markup=skip_comment_kb(),
         )
 
     @dp.message_handler(state=OfferCreate.comment, content_types=types.ContentTypes.TEXT)
@@ -986,8 +995,8 @@ def register(dp):
 
         await call.message.answer(
             f"⭐ <b>Оцінка: {rating_value}/5</b>\n\n"
-            "Напишіть короткий відгук або напишіть <b>пропустити</b>.",
-            reply_markup=back_menu_kb(),
+            "Напишіть короткий відгук або натисніть <b>➡️ Пропустити відгук</b>.",
+            reply_markup=skip_review_kb(),
         )
         await call.answer()
 
