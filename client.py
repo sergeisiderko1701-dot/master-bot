@@ -1,11 +1,11 @@
 import logging
-import re
 
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 from anti_fake import evaluate_order_antifake
+from validators import normalize_phone, is_valid_ua_phone
 from config import settings
 from constants import CATEGORY_LABEL_TO_VALUE, category_label
 from keyboards import (
@@ -83,20 +83,6 @@ def is_bad_problem_text(text: str) -> bool:
     if len(low) < 10:
         return True
     return any(word in low for word in BAD_WORDS)
-
-
-def normalize_phone(value: str) -> str:
-    raw = (value or "").strip()
-    raw = raw.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-    if raw.startswith("8"):
-        raw = "+3" + raw
-    if raw.startswith("380"):
-        raw = "+" + raw
-    return raw
-
-
-def is_valid_phone(value: str) -> bool:
-    return bool(re.fullmatch(r"\+380\d{9}", value or ""))
 
 
 def request_contact_kb():
@@ -290,7 +276,7 @@ def register(dp):
 
         phone = normalize_phone(message.contact.phone_number)
 
-        if not is_valid_phone(phone):
+        if not is_valid_ua_phone(phone):
             await message.answer(
                 "Номер із контакту виглядає некоректно. Надішліть правильний номер або введіть вручну у форматі <b>+380XXXXXXXXX</b>.",
                 reply_markup=request_contact_kb(),
@@ -328,7 +314,7 @@ def register(dp):
 
         phone = normalize_phone(text)
 
-        if not is_valid_phone(phone):
+        if not is_valid_ua_phone(phone):
             await message.answer(
                 "Введіть коректний номер у форматі <b>+380XXXXXXXXX</b> або натисніть кнопку <b>📲 Поділитися номером</b>.",
                 reply_markup=request_contact_kb(),
