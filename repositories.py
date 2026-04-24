@@ -1628,3 +1628,145 @@ async def rate_order(order_id: int, client_user_id: int, rating: int, review_tex
     )
 
     return updated_order
+
+
+# =========================
+# NOTIFICATION JOBS
+# =========================
+
+async def create_notification_job(
+    *,
+    user_id: int,
+    notification_type: str,
+    order_id: Optional[int] = None,
+    payload: Optional[str] = None,
+    next_attempt_at: int = 0,
+):
+    """
+    Stores a notification job for background sending.
+
+    For new_order jobs we use a partial unique index in DB to avoid duplicate
+    notifications to the same master for the same order.
+    """
+    ts = now_ts()
+    row = await fetchrow(
+        """
+        INSERT INTO notification_jobs (
+            user_id,
+            order_id,
+            notification_type,
+            payload,
+            status,
+            attempts,
+            error_text,
+            next_attempt_at,
+            created_at,
+            updated_at
+        )
+        VALUES ($1, $2, $3, $4, 'pending', 0, NULL, $5, $6, $6)
+        ON CONFLICT DO NOTHING
+        RETURNING id
+        """,
+        user_id,
+        order_id,
+        notification_type,
+        payload,
+        int(next_attempt_at or 0),
+        ts,
+    )
+    return int(row["id"]) if row else None
+
+
+async def claim_notification_jobs(limit: int = 10):
+    """
+    Atomically claims pending notification jobs.
+    Uses SKIP LOCKED so multiple workers can run safely.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM notification_jobs
+                WHERE status='pending'
+                  AND COALESCE(next_attempt_at, 0) <= $1
+                ORDER BY id ASC
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+                """,
+                now_ts(),
+                limit,
+            )
+
+            if not rows:
+                return []
+
+            job_ids = [row["id"] for row in rows]
+            await conn.execute(
+                """
+                UPDATE notification_jobs
+                SET status='processing',
+                    attempts=COALESCE(attempts, 0) + 1,
+                    updated_at=$1
+                WHERE id = ANY($2::int[])
+                """,
+                now_ts(),
+                job_ids,
+            )
+
+            return await conn.fetch(
+                """
+                SELECT *
+                FROM notification_jobs
+                WHERE id = ANY($1::int[])
+                ORDER BY id ASC
+                """,
+                job_ids,
+            )
+
+
+async def mark_notification_job_sent(job_id: int):
+    await execute(
+        """
+        UPDATE notification_jobs
+        SET status='sent',
+            error_text=NULL,
+            updated_at=$1
+        WHERE id=$2
+        """,
+        now_ts(),
+        job_id,
+    )
+
+
+async def mark_notification_job_retry(job_id: int, error_text: str, next_attempt_at: int):
+    await execute(
+        """
+        UPDATE notification_jobs
+        SET status='pending',
+            error_text=$1,
+            next_attempt_at=$2,
+            updated_at=$3
+        WHERE id=$4
+        """,
+        str(error_text or "")[:1000],
+        int(next_attempt_at),
+        now_ts(),
+        job_id,
+    )
+
+
+async def mark_notification_job_failed(job_id: int, error_text: str):
+    await execute(
+        """
+        UPDATE notification_jobs
+        SET status='failed',
+            error_text=$1,
+            updated_at=$2
+        WHERE id=$3
+        """,
+        str(error_text or "")[:1000],
+        now_ts(),
+        job_id,
+    )
