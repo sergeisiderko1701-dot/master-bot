@@ -431,21 +431,49 @@ async def get_master_name(master_user_id: Optional[int]) -> str:
 
 
 async def set_master_status_by_id(master_id: int, status: str, availability: Optional[str] = None):
+    """
+    Admin moderation helper.
+
+    If admin approves a master with pending proof-of-work verification,
+    mark verification_status='verified'. If admin blocks/rejects pending proof,
+    mark it as 'rejected'. Masters who skipped verification remain unverified.
+    """
     if availability:
         await execute(
-            "UPDATE masters SET status=$1, availability=$2 WHERE id=$3",
+            """
+            UPDATE masters
+            SET status=$1,
+                availability=$2,
+                verification_status=CASE
+                    WHEN $1='approved' AND COALESCE(verification_status, 'not_verified')='pending' THEN 'verified'
+                    WHEN $1='blocked' AND COALESCE(verification_status, 'not_verified')='pending' THEN 'rejected'
+                    ELSE verification_status
+                END,
+                updated_at=$3
+            WHERE id=$4
+            """,
             status,
             availability,
+            now_ts(),
             master_id,
         )
     else:
         await execute(
-            "UPDATE masters SET status=$1 WHERE id=$2",
+            """
+            UPDATE masters
+            SET status=$1,
+                verification_status=CASE
+                    WHEN $1='approved' AND COALESCE(verification_status, 'not_verified')='pending' THEN 'verified'
+                    WHEN $1='blocked' AND COALESCE(verification_status, 'not_verified')='pending' THEN 'rejected'
+                    ELSE verification_status
+                END,
+                updated_at=$2
+            WHERE id=$3
+            """,
             status,
+            now_ts(),
             master_id,
         )
-
-
 async def delete_master_by_id(master_id: int):
     await execute("DELETE FROM masters WHERE id=$1", master_id)
 
