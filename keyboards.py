@@ -63,8 +63,8 @@ def categories_kb():
 def client_actions_kb():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row(KeyboardButton("📝 Створити заявку"))
-    kb.row(KeyboardButton("📦 Мої заявки"), KeyboardButton("🔧 Змінити послугу"))
-    kb.row(KeyboardButton("🏠 У меню"))
+    kb.row(KeyboardButton("👷 Майстри поруч"), KeyboardButton("📦 Мої заявки"))
+    kb.row(KeyboardButton("🔧 Змінити послугу"), KeyboardButton("🏠 У меню"))
     return kb
 
 
@@ -94,6 +94,20 @@ def master_profile_from_offer_inline(offer_id: int):
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("✅ Обрати цього майстра", callback_data=f"choose_offer_{offer_id}"))
     kb.add(InlineKeyboardButton("⬅️ До пропозиції", callback_data=f"offer_back_{offer_id}"))
+    return kb
+
+
+def nearby_master_actions_inline(master_user_id: int, category: str):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("👁 Профіль", callback_data=f"nearby_master_profile_{master_user_id}"))
+    kb.add(InlineKeyboardButton("📝 Створити заявку", callback_data=f"nearby_create_order_{category}"))
+    return kb
+
+
+def nearby_master_profile_inline(category: str):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("📝 Створити заявку", callback_data=f"nearby_create_order_{category}"))
+    kb.add(InlineKeyboardButton("⬅️ До списку майстрів", callback_data=f"nearby_masters_{category}"))
     return kb
 
 
