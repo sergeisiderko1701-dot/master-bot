@@ -17,6 +17,7 @@ from keyboards import (
     confirm_order_submit_inline,
     main_menu_kb,
     offer_select_inline,
+    skip_photo_kb,
 )
 from repositories import (
     cancel_order,
@@ -54,7 +55,13 @@ from utils import is_admin, normalize_text, now_ts
 logger = logging.getLogger(__name__)
 
 BACK_BUTTONS = {"⬅️ Назад", "Назад", "🔙 Назад"}
-SKIP_WORDS = {"пропустити", "skip", "-"}
+SKIP_WORDS = {
+    "пропустити",
+    "skip",
+    "-",
+    "➡️ пропустити",
+    "➡️ пропустити фото",
+}
 CHANGE_CATEGORY_BUTTONS = {
     "🔄 Змінити спеціальність",
     "🔧 Змінити спеціальність",
@@ -294,7 +301,7 @@ def register(dp):
         await ClientCreateOrder.media.set()
         await message.answer(
             ask_media_text(),
-            reply_markup=back_menu_kb(),
+            reply_markup=skip_photo_kb(),
         )
         await message.answer(tip_before_submit())
 
@@ -332,7 +339,7 @@ def register(dp):
         await ClientCreateOrder.media.set()
         await message.answer(
             ask_media_text(),
-            reply_markup=back_menu_kb(),
+            reply_markup=skip_photo_kb(),
         )
         await message.answer(tip_before_submit())
 
@@ -468,7 +475,7 @@ def register(dp):
             pass
         else:
             await message.answer(
-                "Надішліть фото, відео або напишіть 'пропустити'.",
+                "Надішліть фото, відео або натисніть <b>➡️ Пропустити фото</b>.",
                 reply_markup=back_menu_kb(),
             )
             return
