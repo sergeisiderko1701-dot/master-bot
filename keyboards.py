@@ -86,6 +86,14 @@ def help_role_inline_kb():
 def offer_select_inline(offer_id: int):
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("✅ Обрати цього майстра", callback_data=f"choose_offer_{offer_id}"))
+    kb.add(InlineKeyboardButton("👁 Профіль майстра", callback_data=f"offer_master_profile_{offer_id}"))
+    return kb
+
+
+def master_profile_from_offer_inline(offer_id: int):
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("✅ Обрати цього майстра", callback_data=f"choose_offer_{offer_id}"))
+    kb.add(InlineKeyboardButton("⬅️ До пропозиції", callback_data=f"offer_back_{offer_id}"))
     return kb
 
 
