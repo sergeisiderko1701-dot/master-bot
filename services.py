@@ -1,10 +1,11 @@
 import asyncio
+import json
 import logging
 from aiogram import Bot
 
 from constants import category_label, status_label
 from keyboards import admin_order_actions_inline, order_card_master_actions
-from repositories import execute, get_chat_for_order, get_master_name
+from repositories import create_notification_job, execute, get_chat_for_order, get_master_name
 from utils import now_ts
 from ui_texts import master_card_text
 
@@ -215,7 +216,24 @@ async def send_admin_order_detail(bot: Bot, chat_id: int, order, offers):
 
 
 async def notify_masters_about_order(bot: Bot, order_row, masters):
-    sent_count = 0
+    """
+    Queues notifications for masters instead of sending everything at once.
+
+    The background queue is processed from monitoring.stale_orders_watcher via
+    notification_queue.process_notification_jobs(). This protects the bot from
+    Telegram flood limits and keeps jobs durable across Render restarts.
+    """
+    order_id = safe_val(order_row, "id")
+    queued_count = 0
+
+    payload = json.dumps(
+        {
+            "order_id": order_id,
+            "title": "🔔 <b>Нова заявка</b>",
+            "text_after_card": "Натисніть <b>📨 Відгукнутись</b>, якщо хочете взяти цю заявку в роботу.",
+        },
+        ensure_ascii=False,
+    )
 
     for master in masters:
         master_user_id = safe_val(master, "user_id")
@@ -223,26 +241,21 @@ async def notify_masters_about_order(bot: Bot, order_row, masters):
             continue
 
         try:
-            await send_order_card(
-                bot,
-                master_user_id,
-                order_row,
-                title="🔔 <b>Нова заявка</b>",
-                reply_markup=order_card_master_actions(safe_val(order_row, "id")),
+            job_id = await create_notification_job(
+                user_id=int(master_user_id),
+                order_id=int(order_id),
+                notification_type="new_order",
+                payload=payload,
             )
-            await bot.send_message(
-                master_user_id,
-                "Натисніть <b>📨 Відгукнутись</b>, якщо хочете взяти цю заявку в роботу.",
-            )
-            sent_count += 1
-            await asyncio.sleep(0.05)
+            if job_id:
+                queued_count += 1
         except Exception as e:
-            logger.warning("Помилка повідомлення майстру %s: %s", master_user_id, e)
+            logger.warning("Помилка створення notification job для майстра %s: %s", master_user_id, e)
 
     logger.info(
-        "Розсилка за заявкою %s завершена. Надіслано: %s",
-        safe_val(order_row, "id"),
-        sent_count,
+        "Розсилка за заявкою %s поставлена в чергу. Jobs queued: %s",
+        order_id,
+        queued_count,
     )
 
 
