@@ -19,6 +19,7 @@ from keyboards import (
     order_card_master_actions,
     selected_order_master_actions,
     skip_photo_kb,
+    skip_verification_kb,
 )
 from repositories import (
     approved_master_row,
@@ -31,6 +32,11 @@ from repositories import (
     update_master_profile,
 )
 from services import send_master_card, send_order_card
+from verification import (
+    build_verification_admin_text,
+    save_master_verification,
+    normalize_verification_text,
+)
 from states import MasterRegistration, ProfileEdit
 from ui_texts import (
     ask_district_text,
@@ -196,6 +202,7 @@ def register(dp):
             MasterRegistration.description.state,
             MasterRegistration.experience.state,
             MasterRegistration.phone.state,
+            MasterRegistration.verification.state,
             MasterRegistration.photo.state,
             ProfileEdit.value.state,
             ProfileEdit.category.state,
@@ -367,11 +374,15 @@ def register(dp):
             return
 
         await state.update_data(phone=phone)
-        await MasterRegistration.photo.set()
+        await MasterRegistration.verification.set()
         await message.answer(
-            "📸 <b>Фото профілю</b>\n\n"
-            "Надішліть фото або натисніть <b>➡️ Пропустити фото</b>.",
-            reply_markup=skip_photo_kb(),
+            "🛡 <b>Підтвердження досвіду</b>\n\n"
+            "Надішліть щось одне:\n"
+            "• посилання на Kabanchik/OLX/Instagram/сайт\n"
+            "• скрін профілю або відгуків\n"
+            "• фото прикладів робіт\n\n"
+            "Це побачить тільки адміністратор.",
+            reply_markup=skip_verification_kb(),
         )
 
     @dp.message_handler(state=MasterRegistration.phone, content_types=types.ContentTypes.TEXT)
@@ -395,12 +406,62 @@ def register(dp):
             return
 
         await state.update_data(phone=phone)
+        await MasterRegistration.verification.set()
+        await message.answer(
+            "🛡 <b>Підтвердження досвіду</b>\n\n"
+            "Надішліть щось одне:\n"
+            "• посилання на Kabanchik/OLX/Instagram/сайт\n"
+            "• скрін профілю або відгуків\n"
+            "• фото прикладів робіт\n\n"
+            "Це побачить тільки адміністратор.",
+            reply_markup=skip_verification_kb(),
+        )
+
+    @dp.message_handler(content_types=types.ContentTypes.ANY, state=MasterRegistration.verification)
+    async def reg_verification(message: types.Message, state: FSMContext):
+        text_raw = (message.text or "").strip()
+        text_low = text_raw.lower()
+
+        if text_raw in BACK_BUTTONS:
+            await state.finish()
+            await message.answer(
+                "Повернулись у головне меню.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
+
+        verification_type = None
+        verification_text = None
+        verification_file_id = None
+
+        if message.photo:
+            verification_type = "photo"
+            verification_file_id = message.photo[-1].file_id
+        elif text_low in {"➡️ пропустити перевірку", "пропустити", "skip", "-"}:
+            verification_type = "skipped"
+        elif text_raw:
+            verification_type = "link"
+            verification_text = normalize_verification_text(text_raw)
+        else:
+            await message.answer(
+                "Надішліть посилання, скрін/фото або натисніть <b>➡️ Пропустити перевірку</b>.",
+                reply_markup=skip_verification_kb(),
+            )
+            return
+
+        await state.update_data(
+            verification_type=verification_type,
+            verification_text=verification_text,
+            verification_file_id=verification_file_id,
+        )
+
         await MasterRegistration.photo.set()
         await message.answer(
             "📸 <b>Фото профілю</b>\n\n"
             "Надішліть фото або натисніть <b>➡️ Пропустити фото</b>.",
             reply_markup=skip_photo_kb(),
         )
+
 
     @dp.message_handler(content_types=types.ContentTypes.ANY, state=MasterRegistration.photo)
     async def reg_photo(message: types.Message, state: FSMContext):
@@ -421,6 +482,14 @@ def register(dp):
 
         await create_or_update_master(data)
 
+        await save_master_verification(
+            user_id=message.from_user.id,
+            verification_type=data.get("verification_type") or "skipped",
+            verification_text=data.get("verification_text"),
+            verification_file_id=data.get("verification_file_id"),
+            verification_status="skipped" if (data.get("verification_type") == "skipped") else "pending",
+        )
+
         master_row = await fetchrow(
             "SELECT * FROM masters WHERE user_id=$1",
             message.from_user.id,
@@ -433,6 +502,16 @@ def register(dp):
                 master_row,
                 title="📝 Нова заявка майстра",
             )
+            await dp.bot.send_message(
+                settings.admin_id,
+                build_verification_admin_text(master_row),
+            )
+            if data.get("verification_type") == "photo" and data.get("verification_file_id"):
+                await dp.bot.send_photo(
+                    settings.admin_id,
+                    data.get("verification_file_id"),
+                    caption="📷 Скрін/фото для перевірки досвіду майстра",
+                )
         except Exception:
             pass
 
