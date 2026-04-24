@@ -39,6 +39,22 @@ def _master_presence_text(master_row) -> str:
     return f"⚫ був {hours} год тому"
 
 
+def _verification_badge(row) -> str:
+    try:
+        status = row.get("verification_status")
+    except Exception:
+        try:
+            status = row["verification_status"]
+        except Exception:
+            status = None
+
+    if status == "verified":
+        return "✅ Досвід підтверджено"
+    if status == "pending":
+        return "🛡 Досвід на перевірці"
+    return "⚠️ Досвід не підтверджено"
+
+
 def welcome_text() -> str:
     return (
         "🔧 <b>Одеса Майстер</b>\n\n"
@@ -230,7 +246,8 @@ def master_profile_text(master_row) -> str:
         f"📞 {master_row['phone'] or '—'}\n"
         f"{presence}\n\n"
         f"⭐ <b>{_rating_text(master_row['rating'])}</b> · відгуків: <b>{master_row['reviews_count']}</b>\n"
-        f"✅ <b>Статус:</b> {status_text}\n\n"
+        f"✅ <b>Статус:</b> {status_text}\n"
+        f"{_verification_badge(master_row)}\n\n"
         f"🧾 <b>Про себе</b>\n{master_row['description'] or '—'}\n\n"
         f"🛠 <b>Досвід</b>\n{master_row['experience'] or '—'}"
     )
@@ -247,7 +264,8 @@ def master_card_text(master_row, title: str = "👷 <b>Картка майстр
         f"📍 {master_row['district'] or '—'}\n"
         f"{presence}\n\n"
         f"⭐ <b>{_rating_text(master_row['rating'])}</b> · відгуків: <b>{master_row['reviews_count']}</b>\n"
-        f"✅ <b>Статус:</b> {status_text}\n\n"
+        f"✅ <b>Статус:</b> {status_text}\n"
+        f"{_verification_badge(master_row)}\n\n"
         f"🧾 {master_row['description'] or '—'}\n\n"
         f"📞 {master_row['phone'] or '—'}"
     )
