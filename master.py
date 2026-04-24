@@ -3,6 +3,7 @@ from aiogram.dispatcher import FSMContext
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 from config import settings
+from validators import normalize_phone, is_valid_ua_phone
 from constants import (
     VALID_CATEGORIES,
     category_labels,
@@ -58,24 +59,6 @@ SKIP_WORDS = {
 }
 
 
-def normalize_phone(value: str) -> str:
-    raw = (value or "").strip()
-    raw = raw.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-    if raw.startswith("8"):
-        raw = "+3" + raw
-    if raw.startswith("380"):
-        raw = "+" + raw
-    return raw
-
-
-def is_valid_phone(value: str) -> bool:
-    if not value:
-        return False
-    if not value.startswith("+380"):
-        return False
-    return len(value) == 13 and value[1:].isdigit()
-
-
 def request_contact_kb():
     kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     kb.add(KeyboardButton("📲 Поділитися номером", request_contact=True))
@@ -106,7 +89,7 @@ def _validate_profile_field(field: str, message: types.Message):
 
     if field == "phone":
         phone = normalize_phone(raw_text)
-        if not is_valid_phone(phone):
+        if not is_valid_ua_phone(phone):
             return False, None, "Введіть коректний номер у форматі +380XXXXXXXXX."
         return True, phone, None
 
@@ -376,7 +359,7 @@ def register(dp):
 
         phone = normalize_phone(message.contact.phone_number)
 
-        if not is_valid_phone(phone):
+        if not is_valid_ua_phone(phone):
             await message.answer(
                 "Номер із контакту виглядає некоректно. Надішліть правильний номер або введіть вручну у форматі <b>+380XXXXXXXXX</b>.",
                 reply_markup=request_contact_kb(),
@@ -404,7 +387,7 @@ def register(dp):
             return
 
         phone = normalize_phone(text)
-        if not is_valid_phone(phone):
+        if not is_valid_ua_phone(phone):
             await message.answer(
                 "Введіть коректний номер у форматі <b>+380XXXXXXXXX</b> або натисніть кнопку <b>📲 Поділитися номером</b>.",
                 reply_markup=request_contact_kb(),
@@ -556,7 +539,7 @@ def register(dp):
 
         phone = normalize_phone(message.contact.phone_number)
 
-        if not is_valid_phone(phone):
+        if not is_valid_ua_phone(phone):
             await message.answer(
                 "Номер із контакту виглядає некоректно. Надішліть правильний номер або введіть вручну у форматі <b>+380XXXXXXXXX</b>.",
                 reply_markup=request_contact_kb(),
