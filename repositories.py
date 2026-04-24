@@ -1,5 +1,6 @@
 from typing import Optional
 
+import asyncio
 import asyncpg
 
 from config import settings
@@ -13,21 +14,28 @@ from utils import now_ts
 # =========================
 
 async def _run_with_retry(method_name: str, query: str, *args):
-    pool = get_pool()
+    """Run a DB command and recover from asyncpg prepared statement cache issues.
 
-    try:
-        async with pool.acquire() as conn:
-            method = getattr(conn, method_name)
-            return await method(query, *args)
+    asyncpg may raise InvalidCachedStatementError right after schema changes.
+    A single retry is sometimes not enough if another stale pooled connection is
+    acquired, so we reset the pool and retry a few times.
+    """
+    last_error = None
 
-    except asyncpg.InvalidCachedStatementError:
-        await reset_db_pool(settings.database_url)
-
+    for attempt in range(3):
         pool = get_pool()
-        async with pool.acquire() as conn:
-            method = getattr(conn, method_name)
-            return await method(query, *args)
 
+        try:
+            async with pool.acquire() as conn:
+                method = getattr(conn, method_name)
+                return await method(query, *args)
+
+        except asyncpg.InvalidCachedStatementError as e:
+            last_error = e
+            await reset_db_pool(settings.database_url)
+            await asyncio.sleep(0.05 * (attempt + 1))
+
+    raise last_error
 
 async def fetch(query: str, *args):
     return await _run_with_retry("fetch", query, *args)
