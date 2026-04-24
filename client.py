@@ -16,6 +16,8 @@ from keyboards import (
     confirm_client_cancel_inline,
     confirm_order_submit_inline,
     main_menu_kb,
+    nearby_master_actions_inline,
+    nearby_master_profile_inline,
     offer_select_inline,
     skip_photo_kb,
 )
@@ -27,9 +29,12 @@ from repositories import (
     get_order_row,
     get_recent_client_order_count,
     has_duplicate_recent_problem,
+    get_master_recent_reviews,
+    get_public_master_profile,
     list_approved_masters_for_category,
     list_client_orders,
     list_order_offers,
+    list_public_masters_for_category,
     set_cooldown,
 )
 from security import allow_callback_action, allow_message_action
@@ -41,9 +46,13 @@ from ui_texts import (
     ask_problem_text,
     choose_category_text,
     client_actions_text,
+    nearby_masters_intro_text,
+    no_nearby_masters_text,
     no_offers_yet_text,
     offers_available_nudge_text,
     order_created_text,
+    public_master_card_text,
+    public_master_profile_text,
     order_sent_to_review_text,
     tip_after_category,
     tip_before_submit,
@@ -170,6 +179,113 @@ def register(dp):
             reply_markup=client_actions_kb(),
         )
         await message.answer(tip_after_category())
+
+    async def _start_order_flow_from_category(message_or_call, state: FSMContext, category: str):
+        user_id = message_or_call.from_user.id
+        answer_target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
+
+        prev = await get_cooldown(user_id, "client_create_order")
+        current = now_ts()
+
+        if current - prev < settings.client_order_cooldown:
+            left_seconds = settings.client_order_cooldown - (current - prev)
+            await answer_target.answer(
+                f"Зачекайте {left_seconds} сек перед новою заявкою.",
+                reply_markup=client_actions_kb(),
+            )
+            return False
+
+        active_count = await client_active_orders_count(user_id)
+        if active_count >= settings.max_active_client_orders:
+            await answer_target.answer(
+                "У вас вже занадто багато активних заявок.",
+                reply_markup=client_actions_kb(),
+            )
+            return False
+
+        await state.finish()
+        await state.update_data(client_category=category)
+        await ClientCreateOrder.district.set()
+        await answer_target.answer(
+            ask_district_text(),
+            reply_markup=back_menu_kb(),
+        )
+        return True
+
+    async def _show_nearby_masters(message_or_call, state: FSMContext, category: str):
+        masters = await list_public_masters_for_category(category, 10)
+        answer_target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
+
+        if not masters:
+            await answer_target.answer(
+                no_nearby_masters_text(category),
+                reply_markup=client_actions_kb(),
+            )
+            return
+
+        await answer_target.answer(
+            nearby_masters_intro_text(category, len(masters)),
+            reply_markup=client_actions_kb(),
+        )
+
+        for master in masters:
+            try:
+                await answer_target.answer(
+                    public_master_card_text(master),
+                    reply_markup=nearby_master_actions_inline(master["user_id"], category),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to show nearby master user_id=%s category=%s",
+                    master["user_id"] if master and "user_id" in master else "?",
+                    category,
+                )
+
+    @dp.message_handler(lambda m: m.text == "👷 Майстри поруч", state="*")
+    async def nearby_masters(message: types.Message, state: FSMContext):
+        data = await state.get_data()
+        category = data.get("client_category")
+
+        if not category:
+            await message.answer(
+                "Спочатку оберіть послугу.",
+                reply_markup=categories_kb(),
+            )
+            return
+
+        await _show_nearby_masters(message, state, category)
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("nearby_masters_"), state="*")
+    async def nearby_masters_callback(call: types.CallbackQuery, state: FSMContext):
+        category = call.data.split("nearby_masters_", 1)[1]
+        await state.update_data(client_category=category)
+        await _show_nearby_masters(call, state, category)
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("nearby_master_profile_"), state="*")
+    async def nearby_master_profile(call: types.CallbackQuery, state: FSMContext):
+        master_user_id = int(call.data.split("_")[-1])
+        master = await get_public_master_profile(master_user_id)
+
+        if not master:
+            await call.answer("Профіль майстра недоступний.", show_alert=True)
+            return
+
+        category = (await state.get_data()).get("client_category") or master["category"].split(",")[0]
+        reviews = await get_master_recent_reviews(master_user_id, 5)
+
+        await call.message.answer(
+            public_master_profile_text(master, reviews),
+            reply_markup=nearby_master_profile_inline(category),
+        )
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("nearby_create_order_"), state="*")
+    async def nearby_create_order(call: types.CallbackQuery, state: FSMContext):
+        category = call.data.split("nearby_create_order_", 1)[1]
+        await state.update_data(client_category=category)
+        started = await _start_order_flow_from_category(call, state, category)
+        await call.answer("Створення заявки" if started else "")
 
     @dp.message_handler(lambda m: m.text in {"📨 Створити заявку", "📝 Створити заявку"}, state="*")
     async def create_order_start(message: types.Message, state: FSMContext):
