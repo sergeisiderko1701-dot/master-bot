@@ -1234,6 +1234,37 @@ async def list_order_offers(order_id: int):
     )
 
 
+
+async def get_master_public_profile(master_user_id: int):
+    return await fetchrow(
+        """
+        SELECT *
+        FROM masters
+        WHERE user_id=$1
+          AND status='approved'
+        """,
+        master_user_id,
+    )
+
+
+async def get_master_reviews(master_user_id: int, limit: int = 5):
+    return await fetch(
+        """
+        SELECT
+            id AS order_id,
+            rating,
+            review_text,
+            updated_at,
+            created_at
+        FROM orders
+        WHERE selected_master_id=$1
+          AND rating IS NOT NULL
+        ORDER BY COALESCE(updated_at, created_at, 0) DESC, id DESC
+        LIMIT $2
+        """,
+        master_user_id,
+        limit,
+    )
 async def choose_offer(offer_id: int, client_user_id: int):
     pool = get_pool()
     async with pool.acquire() as conn:
