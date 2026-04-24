@@ -137,6 +137,7 @@ async def init_db(database_url: str):
             database_url,
             min_size=1,
             max_size=10,
+            statement_cache_size=0,
         )
 
     async with _pool.acquire() as conn:
@@ -581,5 +582,6 @@ async def reset_db_pool(database_url: str):
         database_url,
         min_size=1,
         max_size=10,
+        statement_cache_size=0,
     )
     logger.info("Database pool reset successfully")
