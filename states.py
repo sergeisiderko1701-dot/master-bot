@@ -6,6 +6,7 @@ class ClientCreateOrder(StatesGroup):
     problem = State()
     phone = State()
     media = State()
+    confirm = State()
 
 
 class MasterRegistration(StatesGroup):
@@ -15,6 +16,7 @@ class MasterRegistration(StatesGroup):
     description = State()
     experience = State()
     phone = State()
+    verification = State()
     photo = State()
 
 
