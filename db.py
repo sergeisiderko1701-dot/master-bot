@@ -479,6 +479,38 @@ async def init_db(database_url: str):
             NOT VALID
         """)
 
+        # =========================================================
+        # NOTIFICATION JOBS
+        # =========================================================
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notification_jobs (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                order_id INTEGER,
+                notification_type TEXT NOT NULL,
+                payload TEXT,
+                status TEXT DEFAULT 'pending',
+                attempts INTEGER DEFAULT 0,
+                error_text TEXT,
+                next_attempt_at BIGINT DEFAULT 0,
+                created_at BIGINT DEFAULT 0,
+                updated_at BIGINT DEFAULT 0
+            )
+            """
+        )
+
+        await _ensure_column(conn, "notification_jobs", "user_id BIGINT")
+        await _ensure_column(conn, "notification_jobs", "order_id INTEGER")
+        await _ensure_column(conn, "notification_jobs", "notification_type TEXT")
+        await _ensure_column(conn, "notification_jobs", "payload TEXT")
+        await _ensure_column(conn, "notification_jobs", "status TEXT DEFAULT 'pending'")
+        await _ensure_column(conn, "notification_jobs", "attempts INTEGER DEFAULT 0")
+        await _ensure_column(conn, "notification_jobs", "error_text TEXT")
+        await _ensure_column(conn, "notification_jobs", "next_attempt_at BIGINT DEFAULT 0")
+        await _ensure_column(conn, "notification_jobs", "created_at BIGINT DEFAULT 0")
+        await _ensure_column(conn, "notification_jobs", "updated_at BIGINT DEFAULT 0")
+
         # Clean old duplicate MVP data before creating UNIQUE indexes.
         await _cleanup_duplicate_offers_before_unique_index(conn)
         await _cleanup_duplicate_chats_before_unique_index(conn)
@@ -520,6 +552,10 @@ async def init_db(database_url: str):
 
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_spam_logs_user_id ON spam_logs(user_id)")
         await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_spam_logs_created_at ON spam_logs(created_at)")
+
+        await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_notification_jobs_status_next ON notification_jobs(status, next_attempt_at, id)")
+        await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_notification_jobs_order_id ON notification_jobs(order_id)")
+        await _ensure_index(conn, "CREATE INDEX IF NOT EXISTS idx_notification_jobs_user_id ON notification_jobs(user_id)")
 
     logger.info("Database schema initialized successfully")
 
