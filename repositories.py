@@ -1,11 +1,10 @@
 from typing import Optional
 
-import asyncio
 import asyncpg
 
 from config import settings
 from constants import normalize_categories_value, parse_categories
-from db import get_pool, reset_db_pool
+from db import get_pool
 from utils import now_ts
 
 
@@ -14,28 +13,50 @@ from utils import now_ts
 # =========================
 
 async def _run_with_retry(method_name: str, query: str, *args):
-    """Run a DB command and recover from asyncpg prepared statement cache issues.
+    """Run a DB command and recover from asyncpg cached statement errors.
 
-    asyncpg may raise InvalidCachedStatementError right after schema changes.
-    A single retry is sometimes not enough if another stale pooled connection is
-    acquired, so we reset the pool and retry a few times.
+    After schema changes asyncpg can keep a stale prepared statement on an
+    already-open connection. Resetting the whole pool may still hit another
+    stale connection, so first refresh the schema state on the same connection
+    and retry the query there.
     """
-    last_error = None
+    pool = get_pool()
 
-    for attempt in range(3):
-        pool = get_pool()
+    async with pool.acquire() as conn:
+        method = getattr(conn, method_name)
 
         try:
-            async with pool.acquire() as conn:
-                method = getattr(conn, method_name)
-                return await method(query, *args)
+            return await method(query, *args)
 
-        except asyncpg.InvalidCachedStatementError as e:
-            last_error = e
-            await reset_db_pool(settings.database_url)
-            await asyncio.sleep(0.05 * (attempt + 1))
+        except asyncpg.exceptions.InvalidCachedStatementError:
+            # Clear asyncpg/PostgreSQL cached plans for this connection and retry once.
+            try:
+                await conn.reload_schema_state()
+            except Exception:
+                pass
 
-    raise last_error
+            try:
+                await conn.execute("DISCARD PLANS")
+            except Exception:
+                pass
+
+            method = getattr(conn, method_name)
+            return await method(query, *args)
+
+        except asyncpg.InvalidCachedStatementError:
+            # Compatibility fallback for asyncpg versions exposing the exception at top level.
+            try:
+                await conn.reload_schema_state()
+            except Exception:
+                pass
+
+            try:
+                await conn.execute("DISCARD PLANS")
+            except Exception:
+                pass
+
+            method = getattr(conn, method_name)
+            return await method(query, *args)
 
 async def fetch(query: str, *args):
     return await _run_with_retry("fetch", query, *args)
