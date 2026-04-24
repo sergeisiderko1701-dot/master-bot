@@ -12,7 +12,7 @@ from repositories import add_support_message
 from security import allow_message_action
 from states import SupportWrite
 from ui_texts import menu_text, support_intro, support_sent, welcome_text
-from utils import is_admin, safe_str, safe_user_text
+from utils import is_admin, safe_user_text
 
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ def register(dp):
             return
 
         await message.answer(
-            f"hostname={safe_str(socket.gethostname())}\n"
+            f"hostname={socket.gethostname()}\n"
             f"pid={os.getpid()}"
         )
 
@@ -115,10 +115,13 @@ def register(dp):
             return
 
         user = message.from_user
+
         safe_name = safe_user_text(user.full_name)
-        safe_username = safe_user_text("@" + user.username, "") if user.username else ""
-        safe_text = safe_user_text(text, "")
-        username_line = f"🔗 Username: {safe_username}\n" if safe_username else ""
+        safe_text = safe_user_text(text)
+        username_line = (
+            f"🔗 Username: {safe_user_text('@' + user.username)}\n"
+            if user.username else ""
+        )
 
         admin_text = (
             "🆘 <b>Нове звернення в підтримку</b>\n\n"
