@@ -1234,37 +1234,6 @@ async def list_order_offers(order_id: int):
     )
 
 
-
-async def get_master_public_profile(master_user_id: int):
-    return await fetchrow(
-        """
-        SELECT *
-        FROM masters
-        WHERE user_id=$1
-          AND status='approved'
-        """,
-        master_user_id,
-    )
-
-
-async def get_master_reviews(master_user_id: int, limit: int = 5):
-    return await fetch(
-        """
-        SELECT
-            id AS order_id,
-            rating,
-            review_text,
-            updated_at,
-            created_at
-        FROM orders
-        WHERE selected_master_id=$1
-          AND rating IS NOT NULL
-        ORDER BY COALESCE(updated_at, created_at, 0) DESC, id DESC
-        LIMIT $2
-        """,
-        master_user_id,
-        limit,
-    )
 async def choose_offer(offer_id: int, client_user_id: int):
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -1801,3 +1770,97 @@ async def mark_notification_job_failed(job_id: int, error_text: str):
         now_ts(),
         job_id,
     )
+
+# =========================
+# PUBLIC MASTER LIST / REVIEWS
+# =========================
+
+async def list_public_masters_for_category(category: str, limit: int = 10):
+    """
+    Public list of approved masters for client browsing.
+    Contacts are intentionally not returned here.
+    """
+    return await fetch(
+        """
+        SELECT
+            user_id,
+            name,
+            category,
+            district,
+            description,
+            experience,
+            photo,
+            rating,
+            reviews_count,
+            availability,
+            last_seen,
+            status
+        FROM masters
+        WHERE status='approved'
+          AND $1 = ANY(string_to_array(category, ','))
+        ORDER BY
+            CASE WHEN availability='online' THEN 0 ELSE 1 END,
+            rating DESC,
+            reviews_count DESC,
+            last_seen DESC,
+            name ASC
+        LIMIT $2
+        """,
+        category,
+        limit,
+    )
+
+
+async def get_public_master_profile(master_user_id: int):
+    """
+    Public master profile without phone/contact data.
+    """
+    return await fetchrow(
+        """
+        SELECT
+            user_id,
+            name,
+            category,
+            district,
+            description,
+            experience,
+            photo,
+            rating,
+            reviews_count,
+            availability,
+            last_seen,
+            status
+        FROM masters
+        WHERE user_id=$1
+          AND status='approved'
+        """,
+        master_user_id,
+    )
+
+
+async def get_master_recent_reviews(master_user_id: int, limit: int = 5):
+    return await fetch(
+        """
+        SELECT
+            id AS order_id,
+            rating,
+            review_text,
+            updated_at,
+            created_at
+        FROM orders
+        WHERE selected_master_id=$1
+          AND rating IS NOT NULL
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT $2
+        """,
+        master_user_id,
+        limit,
+    )
+
+# Backward-compatible aliases used by offer profile handlers.
+async def get_master_public_profile(master_user_id: int):
+    return await get_public_master_profile(master_user_id)
+
+
+async def get_master_reviews(master_user_id: int, limit: int = 5):
+    return await get_master_recent_reviews(master_user_id, limit)
