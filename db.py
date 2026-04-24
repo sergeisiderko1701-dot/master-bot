@@ -178,6 +178,11 @@ async def init_db(database_url: str):
         await _ensure_column(conn, "masters", "last_seen BIGINT DEFAULT 0")
         await _ensure_column(conn, "masters", "created_at BIGINT DEFAULT 0")
         await _ensure_column(conn, "masters", "updated_at BIGINT DEFAULT 0")
+        await _ensure_column(conn, "masters", "verification_type TEXT")
+        await _ensure_column(conn, "masters", "verification_text TEXT")
+        await _ensure_column(conn, "masters", "verification_file_id TEXT")
+        await _ensure_column(conn, "masters", "verification_status TEXT DEFAULT 'not_verified'")
+        await _ensure_column(conn, "masters", "verification_updated_at BIGINT DEFAULT 0")
 
         # =========================================================
         # ORDERS
