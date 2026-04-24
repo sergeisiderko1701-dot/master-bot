@@ -33,9 +33,9 @@ from repositories import (
     get_chat_history,
     get_cooldown,
     get_order_row,
-    list_approved_masters_for_category,
     get_master_public_profile,
     get_master_reviews,
+    list_approved_masters_for_category,
     list_order_offers,
     master_active_offers_count,
     master_active_orders_count,
@@ -54,8 +54,8 @@ from ui_texts import (
     chat_text_message,
     client_master_selected_text,
     master_selected_for_master_text,
-    offer_card_text,
     master_public_profile_text,
+    offer_card_text,
     order_reopened_text,
     rating_thanks,
     tip_master_offer,
@@ -464,7 +464,6 @@ def register(dp):
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
 
-
     @dp.callback_query_handler(lambda c: c.data.startswith("offer_master_profile_"), state="*")
     async def offer_master_profile_handler(call: types.CallbackQuery, state: FSMContext):
         allowed = await allow_callback_action(
@@ -519,6 +518,7 @@ def register(dp):
             reply_markup=offer_select_inline(offer_id),
         )
         await call.answer()
+
     @dp.callback_query_handler(lambda c: c.data.startswith("choose_offer_") and not c.data.startswith("choose_offer_confirm_"), state="*")
     async def choose_offer_handler(call: types.CallbackQuery, state: FSMContext):
         allowed = await allow_callback_action(
