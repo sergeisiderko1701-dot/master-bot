@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 from aiogram import Bot
@@ -6,7 +5,7 @@ from aiogram import Bot
 from constants import category_label, status_label
 from keyboards import admin_order_actions_inline, order_card_master_actions
 from repositories import create_notification_job, execute, get_chat_for_order, get_master_name
-from utils import now_ts
+from utils import now_ts, safe_str
 from ui_texts import master_card_text
 
 
@@ -19,6 +18,10 @@ def safe_val(row, key, default=None):
         return default if value is None else value
     except Exception:
         return default
+
+
+def h(value, default="—") -> str:
+    return safe_str(value, default)
 
 
 async def clear_broken_order_media(order_id: int):
@@ -90,8 +93,8 @@ async def send_order_card(
 ):
     order_id = safe_val(order_row, "id")
     category = safe_val(order_row, "category", "-")
-    district = safe_val(order_row, "district", "-")
-    problem = safe_val(order_row, "problem", "-")
+    district = h(safe_val(order_row, "district", "-"), "-")
+    problem = h(safe_val(order_row, "problem", "-"), "-")
     status = status_label(safe_val(order_row, "status", "-"))
 
     text = (
@@ -149,16 +152,16 @@ async def send_admin_order_detail(bot: Bot, chat_id: int, order, offers):
     chat = await get_chat_for_order(order_id)
     chat_info = "є" if chat and safe_val(chat, "status") in ["active", "closed"] else "немає"
     media_info = "є" if safe_val(order, "media_file_id") else "немає"
-    selected_master_name = await get_master_name(safe_val(order, "selected_master_id"))
+    selected_master_name = h(await get_master_name(safe_val(order, "selected_master_id")))
 
     offers_text = "немає"
     if offers:
         parts = []
         for offer in offers:
-            offer_name = safe_val(offer, "name", "-")
-            offer_price = safe_val(offer, "price", "-")
-            offer_eta = safe_val(offer, "eta", "-")
-            offer_comment = safe_val(offer, "comment", "-")
+            offer_name = h(safe_val(offer, "name", "-"), "-")
+            offer_price = h(safe_val(offer, "price", "-"), "-")
+            offer_eta = h(safe_val(offer, "eta", "-"), "-")
+            offer_comment = h(safe_val(offer, "comment", "-"), "-")
             parts.append(
                 f"• <b>{offer_name}</b> · {offer_price} · {offer_eta}\n"
                 f"  {offer_comment}"
@@ -167,16 +170,16 @@ async def send_admin_order_detail(bot: Bot, chat_id: int, order, offers):
 
     detail_text = (
         f"🧾 <b>Деталі заявки #{order_id}</b>\n\n"
-        f"👤 <b>Клієнт ID:</b> {safe_val(order, 'user_id', '-')}\n"
+        f"👤 <b>Клієнт ID:</b> {h(safe_val(order, 'user_id', '-'), '-')}\n"
         f"🛠 <b>Категорія:</b> {category_label(safe_val(order, 'category', '-')) if safe_val(order, 'category') else '-'}\n"
-        f"📍 <b>Район / адреса:</b> {safe_val(order, 'district', '—')}\n"
-        f"📝 <b>Опис:</b> {safe_val(order, 'problem', '—')}\n"
+        f"📍 <b>Район / адреса:</b> {h(safe_val(order, 'district', '—'))}\n"
+        f"📝 <b>Опис:</b> {h(safe_val(order, 'problem', '—'))}\n"
         f"📌 <b>Статус:</b> {status_label(safe_val(order, 'status', '-'))}\n"
         f"💬 <b>Чат:</b> {chat_info}\n"
         f"📷 <b>Медіа:</b> {media_info}\n"
         f"👷 <b>Обраний майстер:</b> {selected_master_name}\n"
-        f"⭐ <b>Оцінка:</b> {safe_val(order, 'rating', '—')}\n"
-        f"🗒 <b>Відгук:</b> {safe_val(order, 'review_text', '—')}\n\n"
+        f"⭐ <b>Оцінка:</b> {h(safe_val(order, 'rating', '—'))}\n"
+        f"🗒 <b>Відгук:</b> {h(safe_val(order, 'review_text', '—'))}\n\n"
         f"📬 <b>Пропозиції майстрів</b>\n{offers_text}"
     )
 
@@ -218,10 +221,6 @@ async def send_admin_order_detail(bot: Bot, chat_id: int, order, offers):
 async def notify_masters_about_order(bot: Bot, order_row, masters):
     """
     Queues notifications for masters instead of sending everything at once.
-
-    The background queue is processed from monitoring.stale_orders_watcher via
-    notification_queue.process_notification_jobs(). This protects the bot from
-    Telegram flood limits and keeps jobs durable across Render restarts.
     """
     order_id = safe_val(order_row, "id")
     queued_count = 0
@@ -287,7 +286,7 @@ async def send_chat_history(bot: Bot, chat_id: int, order_id: int, messages):
     for msg in reversed(messages):
         sender = "👤 <b>Клієнт</b>" if safe_val(msg, "sender_role") == "client" else "👷 <b>Майстер</b>"
         message_type = safe_val(msg, "message_type", "text")
-        msg_text = safe_val(msg, "text", "")
+        msg_text = h(safe_val(msg, "text", ""), "")
 
         if message_type == "text":
             body = msg_text or "Без тексту"
@@ -296,7 +295,7 @@ async def send_chat_history(bot: Bot, chat_id: int, order_id: int, messages):
         elif message_type == "video":
             body = f"📹 {msg_text or 'Відео без підпису'}"
         else:
-            body = f"[{message_type}] {msg_text}".strip()
+            body = f"[{h(message_type, '')}] {msg_text}".strip()
 
         lines.append(f"{sender}:\n{body}\n")
 
