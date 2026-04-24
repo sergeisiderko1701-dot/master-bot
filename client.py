@@ -40,6 +40,8 @@ from ui_texts import (
     ask_problem_text,
     choose_category_text,
     client_actions_text,
+    no_offers_yet_text,
+    offers_available_nudge_text,
     order_created_text,
     order_sent_to_review_text,
     tip_after_category,
@@ -541,7 +543,30 @@ def register(dp):
                     title="📄 Ваша заявка",
                     reply_markup=client_order_actions_inline(row["id"], row["status"]),
                 )
+
+                if row["status"] == "new":
+                    await message.answer(no_offers_yet_text(row["id"]))
+
+                elif row["status"] == "offered":
+                    try:
+                        offers = await list_order_offers(row["id"])
+                        await message.answer(
+                            offers_available_nudge_text(row["id"], len(offers)),
+                            reply_markup=client_order_actions_inline(row["id"], row["status"]),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to show offers nudge for order_id=%s user_id=%s",
+                            row["id"],
+                            message.from_user.id,
+                        )
+
             except Exception:
+                logger.exception(
+                    "Failed to send client order card order_id=%s user_id=%s",
+                    row["id"] if row and "id" in row else "?",
+                    message.from_user.id,
+                )
                 continue
 
     @dp.callback_query_handler(lambda c: c.data.startswith("client_offers_"), state="*")
