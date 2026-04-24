@@ -13,6 +13,7 @@ from keyboards import (
     confirm_finish_order_inline,
     confirm_refuse_order_inline,
     exit_chat_inline,
+    master_profile_from_offer_inline,
     main_menu_kb,
     offer_select_inline,
     rating_inline,
@@ -33,6 +34,8 @@ from repositories import (
     get_cooldown,
     get_order_row,
     list_approved_masters_for_category,
+    get_master_public_profile,
+    get_master_reviews,
     list_order_offers,
     master_active_offers_count,
     master_active_orders_count,
@@ -52,6 +55,7 @@ from ui_texts import (
     client_master_selected_text,
     master_selected_for_master_text,
     offer_card_text,
+    master_public_profile_text,
     order_reopened_text,
     rating_thanks,
     tip_master_offer,
@@ -460,6 +464,61 @@ def register(dp):
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
 
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("offer_master_profile_"), state="*")
+    async def offer_master_profile_handler(call: types.CallbackQuery, state: FSMContext):
+        allowed = await allow_callback_action(
+            call,
+            action_key="client_open_master_profile_from_offer",
+            limit=15,
+            window_seconds=60,
+            mute_seconds=300,
+        )
+        if not allowed:
+            return
+
+        offer_id = int(call.data.split("_")[-1])
+        offer_full = await get_offer_full_row(offer_id)
+        if not offer_full:
+            await call.answer("Пропозицію не знайдено.", show_alert=True)
+            return
+
+        order = await get_order_row(int(offer_full["order_id"]))
+        if not order or order["user_id"] != call.from_user.id:
+            await call.answer("Профіль недоступний.", show_alert=True)
+            return
+
+        master_row = await get_master_public_profile(int(offer_full["master_user_id"]))
+        if not master_row:
+            await call.answer("Профіль майстра недоступний.", show_alert=True)
+            return
+
+        reviews = await get_master_reviews(int(offer_full["master_user_id"]), 5)
+
+        await call.message.answer(
+            master_public_profile_text(master_row, reviews),
+            reply_markup=master_profile_from_offer_inline(offer_id),
+        )
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("offer_back_"), state="*")
+    async def offer_back_handler(call: types.CallbackQuery, state: FSMContext):
+        offer_id = int(call.data.split("_")[-1])
+        offer_full = await get_offer_full_row(offer_id)
+        if not offer_full:
+            await call.answer("Пропозицію не знайдено.", show_alert=True)
+            return
+
+        order = await get_order_row(int(offer_full["order_id"]))
+        if not order or order["user_id"] != call.from_user.id:
+            await call.answer("Пропозиція недоступна.", show_alert=True)
+            return
+
+        await call.message.answer(
+            offer_card_text(offer_full),
+            reply_markup=offer_select_inline(offer_id),
+        )
+        await call.answer()
     @dp.callback_query_handler(lambda c: c.data.startswith("choose_offer_") and not c.data.startswith("choose_offer_confirm_"), state="*")
     async def choose_offer_handler(call: types.CallbackQuery, state: FSMContext):
         allowed = await allow_callback_action(
