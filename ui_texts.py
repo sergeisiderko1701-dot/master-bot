@@ -276,6 +276,46 @@ def offer_card_text(offer) -> str:
     )
 
 
+
+
+def master_public_profile_text(master_row, reviews=None) -> str:
+    presence = _master_presence_text(master_row)
+    rating = _rating_text(master_row["rating"])
+    reviews_count = master_row["reviews_count"] or 0
+
+    review_lines = []
+    for item in reviews or []:
+        try:
+            rating_value = item["rating"]
+            review_text = item["review_text"]
+        except Exception:
+            rating_value = None
+            review_text = None
+
+        if rating_value is None:
+            continue
+
+        if review_text:
+            review_lines.append(f"⭐ {rating_value} — {review_text}")
+        else:
+            review_lines.append(f"⭐ {rating_value} — без текстового відгуку")
+
+        if len(review_lines) >= 5:
+            break
+
+    reviews_block = "\n".join(review_lines) if review_lines else "Поки немає текстових відгуків."
+
+    return (
+        f"👷 <b>{master_row['name']}</b>\n\n"
+        f"🔧 {category_labels(master_row['category'])}\n"
+        f"📍 {master_row['district'] or '—'}\n"
+        f"{presence}\n\n"
+        f"⭐ <b>{rating}</b> · відгуків: <b>{reviews_count}</b>\n\n"
+        f"🧾 <b>Про майстра</b>\n{master_row['description'] or '—'}\n\n"
+        f"🛠 <b>Досвід</b>\n{master_row['experience'] or '—'}\n\n"
+        f"📜 <b>Останні відгуки</b>\n{reviews_block}\n\n"
+        "Контакти відкриються тільки після вибору майстра."
+    )
 def client_master_selected_text(
     master_name: str,
     phone: str,
