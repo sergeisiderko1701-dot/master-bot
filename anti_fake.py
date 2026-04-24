@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from validators import is_valid_ua_phone
+
 
 MIN_PROBLEM_LEN = 10
 RECENT_ORDERS_HARD_LIMIT = 2
@@ -10,24 +12,6 @@ class AntiFakeDecision:
     is_suspect: bool
     score: int
     reasons: list[str]
-
-
-def _digits_only(value: str) -> str:
-    return "".join(ch for ch in str(value or "") if ch.isdigit())
-
-
-def is_valid_phone(phone: str) -> bool:
-    digits = _digits_only(phone)
-
-    # +380XXXXXXXXX
-    if digits.startswith("380") and len(digits) == 12:
-        return True
-
-    # 0XXXXXXXXX
-    if digits.startswith("0") and len(digits) == 10:
-        return True
-
-    return False
 
 
 def normalize_problem_for_compare(problem: str) -> str:
@@ -52,7 +36,7 @@ def evaluate_order_antifake(
         score += 2
         reasons.append("Опис проблеми коротший за 10 символів")
 
-    if not is_valid_phone(phone):
+    if not is_valid_ua_phone(phone):
         score += 2
         reasons.append("Телефон схожий на некоректний")
 
