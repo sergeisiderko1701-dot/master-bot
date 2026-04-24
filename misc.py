@@ -12,7 +12,7 @@ from repositories import add_support_message
 from security import allow_message_action
 from states import SupportWrite
 from ui_texts import menu_text, support_intro, support_sent, welcome_text
-from utils import is_admin, safe_str
+from utils import is_admin, safe_str, safe_user_text
 
 
 logger = logging.getLogger(__name__)
@@ -115,10 +115,10 @@ def register(dp):
             return
 
         user = message.from_user
-        safe_name = safe_str(user.full_name)
-        safe_username = safe_str(user.username, "") if user.username else ""
-        safe_text = safe_str(text, "")
-        username_line = f"🔗 Username: @{safe_username}\n" if safe_username else ""
+        safe_name = safe_user_text(user.full_name)
+        safe_username = safe_user_text("@" + user.username, "") if user.username else ""
+        safe_text = safe_user_text(text, "")
+        username_line = f"🔗 Username: {safe_username}\n" if safe_username else ""
 
         admin_text = (
             "🆘 <b>Нове звернення в підтримку</b>\n\n"
