@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from config import settings
+from notification_queue import process_notification_jobs
 from keyboards import (
     admin_order_actions_inline,
     client_order_actions_inline,
@@ -382,7 +383,7 @@ async def notify_clients_about_finish_reminder(bot):
 
 async def stale_orders_watcher(bot, shutdown_event: asyncio.Event):
     logger.info(
-        "Stale orders watcher started: every %s sec, master reminder=%s sec, admin alert=%s sec, client offer reminder=%s sec, client finish reminder=%s sec",
+        "Stale orders watcher started: notification queue every 2 sec, stale checks every %s sec, master reminder=%s sec, admin alert=%s sec, client offer reminder=%s sec, client finish reminder=%s sec",
         STALE_ORDERS_CHECK_INTERVAL_SECONDS,
         MASTER_REMINDER_AFTER_SECONDS,
         ADMIN_NO_OFFER_ALERT_AFTER_SECONDS,
@@ -390,19 +391,32 @@ async def stale_orders_watcher(bot, shutdown_event: asyncio.Event):
         CLIENT_FINISH_REMINDER_AFTER_SECONDS,
     )
 
+    last_stale_check_at = 0
+    notification_loop_interval = 2
+
     while not shutdown_event.is_set():
         try:
-            await notify_masters_about_stale_orders(bot)
-            await notify_admin_about_stale_orders(bot)
-            await notify_clients_about_offer_reminder(bot)
-            await notify_clients_about_finish_reminder(bot)
+            processed = await process_notification_jobs(bot, batch_limit=10)
+            if processed:
+                logger.info("Notification queue processed jobs=%s", processed)
         except Exception:
-            logger.exception("Stale orders watcher iteration failed")
+            logger.exception("Notification queue iteration failed")
+
+        current_ts = now_ts()
+        if current_ts - last_stale_check_at >= STALE_ORDERS_CHECK_INTERVAL_SECONDS:
+            last_stale_check_at = current_ts
+            try:
+                await notify_masters_about_stale_orders(bot)
+                await notify_admin_about_stale_orders(bot)
+                await notify_clients_about_offer_reminder(bot)
+                await notify_clients_about_finish_reminder(bot)
+            except Exception:
+                logger.exception("Stale orders watcher iteration failed")
 
         try:
             await asyncio.wait_for(
                 shutdown_event.wait(),
-                timeout=STALE_ORDERS_CHECK_INTERVAL_SECONDS,
+                timeout=notification_loop_interval,
             )
         except asyncio.TimeoutError:
             continue
