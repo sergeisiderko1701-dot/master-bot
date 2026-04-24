@@ -58,6 +58,7 @@ SKIP_WORDS = {"пропустити", "skip", "-"}
 CHANGE_CATEGORY_BUTTONS = {
     "🔄 Змінити спеціальність",
     "🔧 Змінити спеціальність",
+    "🔧 Змінити послугу",
 }
 
 BAD_WORDS = {
@@ -99,7 +100,7 @@ def request_contact_kb():
 
 
 def register(dp):
-    @dp.message_handler(lambda m: m.text == "👤 Клієнт", state="*")
+    @dp.message_handler(lambda m: m.text in {"👤 Клієнт", "👤 Знайти майстра"}, state="*")
     async def client_menu(message: types.Message, state: FSMContext):
         data = await state.get_data()
         category = data.get("client_category")
@@ -177,7 +178,7 @@ def register(dp):
         )
         await message.answer(tip_after_category())
 
-    @dp.message_handler(lambda m: m.text == "📨 Створити заявку", state="*")
+    @dp.message_handler(lambda m: m.text in {"📨 Створити заявку", "📝 Створити заявку"}, state="*")
     async def create_order_start(message: types.Message, state: FSMContext):
         allowed = await allow_message_action(
             message,
