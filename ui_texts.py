@@ -202,10 +202,14 @@ def no_offers_yet_text(order_id: int) -> str:
     )
 
 
-def offers_available_nudge_text(count: int | None = None) -> str:
-    if count:
+def offers_available_nudge_text(order_id_or_count: int | None = None, count: int | None = None) -> str:
+    # Backward compatible: supports both offers_available_nudge_text(count)
+    # and offers_available_nudge_text(order_id, count).
+    actual_count = count if count is not None else order_id_or_count
+
+    if actual_count:
         return (
-            f"🔥 <b>Є пропозиції: {count}</b>\n\n"
+            f"🔥 <b>Є пропозиції: {actual_count}</b>\n\n"
             "Оберіть майстра, який підходить найкраще 👇"
         )
     return (
@@ -276,46 +280,6 @@ def offer_card_text(offer) -> str:
     )
 
 
-
-
-def master_public_profile_text(master_row, reviews=None) -> str:
-    presence = _master_presence_text(master_row)
-    rating = _rating_text(master_row["rating"])
-    reviews_count = master_row["reviews_count"] or 0
-
-    review_lines = []
-    for item in reviews or []:
-        try:
-            rating_value = item["rating"]
-            review_text = item["review_text"]
-        except Exception:
-            rating_value = None
-            review_text = None
-
-        if rating_value is None:
-            continue
-
-        if review_text:
-            review_lines.append(f"⭐ {rating_value} — {review_text}")
-        else:
-            review_lines.append(f"⭐ {rating_value} — без текстового відгуку")
-
-        if len(review_lines) >= 5:
-            break
-
-    reviews_block = "\n".join(review_lines) if review_lines else "Поки немає текстових відгуків."
-
-    return (
-        f"👷 <b>{master_row['name']}</b>\n\n"
-        f"🔧 {category_labels(master_row['category'])}\n"
-        f"📍 {master_row['district'] or '—'}\n"
-        f"{presence}\n\n"
-        f"⭐ <b>{rating}</b> · відгуків: <b>{reviews_count}</b>\n\n"
-        f"🧾 <b>Про майстра</b>\n{master_row['description'] or '—'}\n\n"
-        f"🛠 <b>Досвід</b>\n{master_row['experience'] or '—'}\n\n"
-        f"📜 <b>Останні відгуки</b>\n{reviews_block}\n\n"
-        "Контакти відкриються тільки після вибору майстра."
-    )
 def client_master_selected_text(
     master_name: str,
     phone: str,
@@ -389,3 +353,91 @@ def rating_thanks() -> str:
         "✅ <b>Дякуємо!</b>\n\n"
         "Ваш відгук допоможе іншим клієнтам."
     )
+
+# =========================
+# PUBLIC MASTER BROWSING
+# =========================
+
+def _row_get(row, key, default=None):
+    try:
+        value = row[key]
+        return default if value is None else value
+    except Exception:
+        try:
+            value = row.get(key, default)
+            return default if value is None else value
+        except Exception:
+            return default
+
+
+def nearby_masters_intro_text(category: str, count: int) -> str:
+    return (
+        f"👷 <b>Майстри поруч: {category_label(category)}</b>\n\n"
+        f"Показуємо підтверджених майстрів у цій категорії: <b>{count}</b>.\n"
+        "Контакти відкриваються тільки після створення заявки та вибору майстра."
+    )
+
+
+def no_nearby_masters_text(category: str) -> str:
+    return (
+        f"😕 <b>Поки немає майстрів: {category_label(category)}</b>\n\n"
+        "Створіть заявку — адміністратор допоможе знайти спеціаліста, "
+        "щойно він буде доступний."
+    )
+
+
+def public_master_card_text(master_row) -> str:
+    presence = _master_presence_text(master_row)
+    name = _row_get(master_row, "name", "Майстер")
+    category = _row_get(master_row, "category", "")
+    district = _row_get(master_row, "district", "—")
+    rating = _rating_text(_row_get(master_row, "rating", 0))
+    reviews_count = int(_row_get(master_row, "reviews_count", 0) or 0)
+    description = _row_get(master_row, "description", "—")
+
+    return (
+        f"👷 <b>{name}</b>\n"
+        f"{presence}\n"
+        f"⭐ {rating} · відгуків: {reviews_count}\n"
+        f"🔧 {category_labels(category)}\n"
+        f"📍 {district}\n\n"
+        f"🧾 {description}"
+    )
+
+
+def public_master_profile_text(master_row, reviews=None) -> str:
+    reviews = reviews or []
+    presence = _master_presence_text(master_row)
+    name = _row_get(master_row, "name", "Майстер")
+    category = _row_get(master_row, "category", "")
+    district = _row_get(master_row, "district", "—")
+    rating = _rating_text(_row_get(master_row, "rating", 0))
+    reviews_count = int(_row_get(master_row, "reviews_count", 0) or 0)
+    description = _row_get(master_row, "description", "—")
+    experience = _row_get(master_row, "experience", "—")
+
+    review_lines = []
+    for item in reviews[:5]:
+        review_rating = _row_get(item, "rating", "—")
+        review_text = _row_get(item, "review_text", "")
+        if review_text:
+            review_lines.append(f"⭐ {review_rating} — {review_text}")
+        else:
+            review_lines.append(f"⭐ {review_rating} — без текстового відгуку")
+
+    reviews_block = "\n".join(review_lines) if review_lines else "Поки немає текстових відгуків."
+
+    return (
+        f"👷 <b>{name}</b>\n\n"
+        f"🔧 {category_labels(category)}\n"
+        f"📍 {district}\n"
+        f"{presence}\n\n"
+        f"⭐ <b>{rating}</b> · відгуків: <b>{reviews_count}</b>\n\n"
+        f"🧾 <b>Про майстра</b>\n{description}\n\n"
+        f"🛠 <b>Досвід</b>\n{experience}\n\n"
+        f"📜 <b>Останні відгуки</b>\n{reviews_block}"
+    )
+
+# Backward-compatible alias used by offer profile handlers.
+def master_public_profile_text(master_row, reviews=None) -> str:
+    return public_master_profile_text(master_row, reviews)
