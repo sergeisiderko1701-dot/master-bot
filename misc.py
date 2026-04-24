@@ -6,13 +6,13 @@ from aiogram import types
 from aiogram.dispatcher import FSMContext
 
 from config import settings
-from keyboards import back_menu_kb, main_menu_kb
+from keyboards import back_menu_kb, main_menu_kb, support_reply_inline
 from presence import update_master_presence_if_needed
 from repositories import add_support_message
 from security import allow_message_action
 from states import SupportWrite
 from ui_texts import menu_text, support_intro, support_sent, welcome_text
-from utils import is_admin
+from utils import is_admin, safe_str
 
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ def register(dp):
             return
 
         await message.answer(
-            f"hostname={socket.gethostname()}\n"
+            f"hostname={safe_str(socket.gethostname())}\n"
             f"pid={os.getpid()}"
         )
 
@@ -115,20 +115,21 @@ def register(dp):
             return
 
         user = message.from_user
-        username_line = f"🔗 Username: @{user.username}\n" if user.username else ""
+        safe_name = safe_str(user.full_name)
+        safe_username = safe_str(user.username, "") if user.username else ""
+        safe_text = safe_str(text, "")
+        username_line = f"🔗 Username: @{safe_username}\n" if safe_username else ""
 
         admin_text = (
             "🆘 <b>Нове звернення в підтримку</b>\n\n"
-            f"👤 <b>Користувач:</b> {user.full_name}\n"
+            f"👤 <b>Користувач:</b> {safe_name}\n"
             f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
             f"{username_line}"
-            f"\n💬 <b>Повідомлення:</b>\n{text}"
+            f"\n💬 <b>Повідомлення:</b>\n{safe_text}"
         )
 
         try:
             await add_support_message(user.id, text)
-
-            from keyboards import support_reply_inline
 
             await message.bot.send_message(
                 settings.admin_id,
