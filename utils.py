@@ -14,11 +14,12 @@ def is_admin(user_id: int) -> bool:
 
 def normalize_text(value, max_len: int = 1500) -> str:
     """
-    Очищає та нормалізує текст:
-    - приводить до str
-    - прибирає зайві пробіли
-    - екранує HTML
-    - обрізає довжину
+    Очищає та нормалізує текст для збереження/подальшого показу в Telegram HTML.
+
+    Важливо:
+    - html.unescape() перед html.escape() прибирає проблему подвійного escape,
+      якщо текст уже був збережений як &lt;...&gt;.
+    - HTML-теги користувача завжди стають безпечним текстом.
     """
     if value is None:
         return ""
@@ -28,14 +29,17 @@ def normalize_text(value, max_len: int = 1500) -> str:
         return ""
 
     value = " ".join(value.split())
-    value = html.escape(value)
+    value = html.escape(html.unescape(value), quote=True)
 
     return value[:max_len]
 
 
 def safe_str(value, default: str = "—") -> str:
     """
-    Безпечний текст для UI.
+    Безпечний текст для вставки в повідомлення Telegram з parse_mode='HTML'.
+
+    Використовуй для будь-якого тексту з БД, Telegram user object або введення користувача.
+    Не використовуй для власних HTML-шаблонів типу '<b>...</b>'.
     """
     if value is None:
         return default
@@ -44,7 +48,7 @@ def safe_str(value, default: str = "—") -> str:
     if not value:
         return default
 
-    return html.escape(value)
+    return html.escape(html.unescape(value), quote=True)
 
 
 def safe_int(value, default: int = 0) -> int:
