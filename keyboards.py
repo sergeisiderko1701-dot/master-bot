@@ -43,6 +43,13 @@ def skip_review_kb():
     kb.row(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
     return kb
 
+
+def skip_verification_kb():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row(KeyboardButton("➡️ Пропустити перевірку"))
+    kb.row(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
+    return kb
+
 def main_menu_kb(is_admin_user: bool = False):
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row(KeyboardButton("👤 Знайти майстра"), KeyboardButton("🔧 Я майстер"))
