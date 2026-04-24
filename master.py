@@ -454,7 +454,7 @@ def register(dp):
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
 
-    @dp.message_handler(lambda m: m.text == "👤 Мій профіль", state="*")
+    @dp.message_handler(lambda m: m.text in {"👤 Мій профіль", "👤 Профіль"}, state="*")
     async def profile(message: types.Message, state: FSMContext):
         master = await approved_master_row(message.from_user.id)
         if not master:
@@ -467,7 +467,7 @@ def register(dp):
         await touch_master_presence(message.from_user.id)
         await show_master_profile(message, master)
 
-    @dp.message_handler(lambda m: m.text == "✏️ Редагувати профіль", state="*")
+    @dp.message_handler(lambda m: m.text in {"✏️ Редагувати профіль", "✏️ Редагувати"}, state="*")
     async def edit_profile(message: types.Message, state: FSMContext):
         master = await approved_master_row(message.from_user.id)
         if not master:
@@ -588,7 +588,7 @@ def register(dp):
         await state.finish()
         await message.answer("✅ Профіль оновлено.", reply_markup=master_menu_kb())
 
-    @dp.message_handler(lambda m: m.text == "📦 Нові заявки", state="*")
+    @dp.message_handler(lambda m: m.text in {"📦 Нові заявки", "🔔 Нові заявки"}, state="*")
     async def new_orders(message: types.Message, state: FSMContext):
         master = await approved_master_row(message.from_user.id)
         if not master:
@@ -636,7 +636,7 @@ def register(dp):
             except Exception:
                 continue
 
-    @dp.message_handler(lambda m: m.text == "💬 Активні заявки", state="*")
+    @dp.message_handler(lambda m: m.text in {"💬 Активні заявки", "📌 Мої роботи"}, state="*")
     async def active_orders(message: types.Message, state: FSMContext):
         master = await approved_master_row(message.from_user.id)
         if not master:
