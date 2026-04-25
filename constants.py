@@ -84,6 +84,71 @@ def category_labels(value) -> str:
 
 
 # =========================
+# ODESSA DISTRICTS
+# =========================
+
+DISTRICT_ALL_ODESSA = "Вся Одеса"
+
+ODESSA_DISTRICTS = [
+    "Центр",
+    "Аркадія",
+    "Фонтан",
+    "Таїрова",
+    "Черемушки",
+    "Молдаванка",
+    "Слобідка",
+    "Селище Котовського",
+    "Пересип",
+    "Лузанівка",
+    "Чорноморка",
+    DISTRICT_ALL_ODESSA,
+]
+
+VALID_ODESSA_DISTRICTS = set(ODESSA_DISTRICTS)
+
+
+def parse_districts(value) -> list[str]:
+    if not value:
+        return []
+
+    if isinstance(value, (list, tuple, set)):
+        result = []
+        for item in value:
+            item = str(item).strip()
+            if item:
+                result.append(item)
+        return result
+
+    return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def normalize_districts_value(value) -> str:
+    districts = parse_districts(value)
+    unique = []
+    seen = set()
+
+    # Якщо майстер обрав "Вся Одеса", зберігаємо тільки її.
+    # Це спрощує майбутню фільтрацію:
+    # if DISTRICT_ALL_ODESSA in master_districts -> показувати всі заявки.
+    if DISTRICT_ALL_ODESSA in districts:
+        return DISTRICT_ALL_ODESSA
+
+    for item in districts:
+        if item in VALID_ODESSA_DISTRICTS and item not in seen:
+            unique.append(item)
+            seen.add(item)
+
+    return ",".join(unique)
+
+
+def district_labels(value) -> str:
+    districts = parse_districts(value)
+    if not districts:
+        return "—"
+    return ", ".join(districts)
+
+
+# =========================
 # ORDER STATUSES
 # =========================
 
