@@ -24,6 +24,7 @@ from aiogram.utils.exceptions import (
 
 import admin
 import admin_chat
+import chat_close_fix
 import client
 import common
 import master
@@ -54,6 +55,7 @@ def register_handlers(dp: Dispatcher) -> None:
     client.register(dp)
     master.register(dp)
     admin_chat.register(dp)  # must be before offers.register(dp) to let admin intercept chat_history_ callbacks
+    chat_close_fix.register(dp)  # must be before offers.register(dp) to fix chat reply keyboard close/history
     offers.register(dp)
     admin.register(dp)
     misc.register(dp)
