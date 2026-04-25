@@ -20,23 +20,28 @@ PAGE_SIZE = 5
 
 CATEGORY_PLUMBER = "plumber"
 CATEGORY_ELECTRICIAN = "electrician"
+CATEGORY_HANDYMAN = "handyman"
 CATEGORY_AIR_CONDITIONERS = "air_conditioners"
-CATEGORY_WASHING_MACHINES = "washing_machines"
-CATEGORY_FURNITURE = "furniture"
-CATEGORY_DOORS_LOCKS = "doors_locks"
-CATEGORY_REPAIR = "repair"
+CATEGORY_APPLIANCE_REPAIR = "appliance_repair"
+CATEGORY_WINDOWS_DOORS = "windows_doors"
+
+# Залишаємо старі константи як aliases для сумісності,
+# якщо десь у старому коді ще є імпорти.
+CATEGORY_WASHING_MACHINES = CATEGORY_APPLIANCE_REPAIR
+CATEGORY_FURNITURE = CATEGORY_HANDYMAN
+CATEGORY_DOORS_LOCKS = CATEGORY_WINDOWS_DOORS
+CATEGORY_REPAIR = CATEGORY_HANDYMAN
 CATEGORY_CLEANING = "cleaning"
 
-# Порядок важливий: саме так категорії будуть показуватися в UI
+# Порядок важливий: саме так категорії будуть показуватися в UI.
+# Назви мають 1-в-1 збігатися з category_labels у keyboards.categories_kb().
 CATEGORIES = [
-    ("🚰 Сантехнік", CATEGORY_PLUMBER),
+    ("🔧 Сантехнік", CATEGORY_PLUMBER),
     ("⚡ Електрик", CATEGORY_ELECTRICIAN),
+    ("🔨 Майстер на годину", CATEGORY_HANDYMAN),
     ("❄️ Кондиціонери", CATEGORY_AIR_CONDITIONERS),
-    ("🧺 Пральні машини", CATEGORY_WASHING_MACHINES),
-    ("🪑 Меблі", CATEGORY_FURNITURE),
-    ("🚪 Двері/замки", CATEGORY_DOORS_LOCKS),
-    ("🛠 Ремонт", CATEGORY_REPAIR),
-    ("🧹 Прибирання", CATEGORY_CLEANING),
+    ("🔌 Ремонт техніки", CATEGORY_APPLIANCE_REPAIR),
+    ("🪟 Вікна / двері", CATEGORY_WINDOWS_DOORS),
 ]
 
 CATEGORY_LABEL_TO_VALUE = {label: value for label, value in CATEGORIES}
