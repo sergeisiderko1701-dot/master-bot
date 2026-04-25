@@ -23,6 +23,7 @@ from keyboards import (
     skip_photo_kb,
 )
 from repositories import (
+    is_user_blocked,
     cancel_order,
     client_active_orders_count,
     create_order,
@@ -242,6 +243,11 @@ def register(dp):
 
     async def _start_order_flow_from_saved_location(message_or_call, state: FSMContext):
         user_id = message_or_call.from_user.id
+
+        if await is_user_blocked(user_id):
+            target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
+            await target.answer("🚫 Ви заблоковані і не можете створювати заявки.")
+            return False
         target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
         data = await state.get_data()
         category = data.get("client_category")
@@ -383,6 +389,9 @@ def register(dp):
 
     @dp.message_handler(lambda m: m.text in {"📨 Створити заявку", "📝 Створити заявку"}, state="*")
     async def create_order_start(message: types.Message, state: FSMContext):
+        if await is_user_blocked(message.from_user.id):
+            await message.answer("🚫 Ви заблоковані і не можете створювати заявки.")
+            return
         allowed = await allow_message_action(
             message,
             action_key="client_create_order_click",
@@ -485,6 +494,11 @@ def register(dp):
     async def _create_order_from_state(message_or_call, state: FSMContext):
         data = await state.get_data()
         user_id = message_or_call.from_user.id
+
+        if await is_user_blocked(user_id):
+            target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
+            await target.answer("🚫 Ви заблоковані і не можете створювати заявки.")
+            return False
         answer_target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
 
         category = data.get("client_category")
