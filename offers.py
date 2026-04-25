@@ -63,7 +63,7 @@ from ui_texts import (
     tip_no_response,
     tip_reopen_order,
 )
-from utils import is_admin, normalize_text, now_ts
+from utils import is_admin, normalize_text, now_ts, safe_str, safe_user_text
 
 
 logger = logging.getLogger(__name__)
@@ -145,16 +145,18 @@ def register(dp):
         return await _get_actual_master_markup(order_id)
 
     def build_client_contact_text(user: types.User, order_row) -> str:
-        full_name = " ".join(
+        raw_full_name = " ".join(
             part for part in [user.first_name, user.last_name] if part
         ).strip() or "Клієнт"
-        username_line = f"🔗 Username: @{user.username}\n" if user.username else ""
-        tg_link = f'<a href="tg://user?id={user.id}">{full_name}</a>'
-        phone_line = (
-            f"📞 Телефон: {_safe_val(order_row, 'client_phone')}\n"
-            if _safe_val(order_row, "client_phone")
+        full_name = safe_user_text(raw_full_name, "Клієнт")
+        username_line = (
+            f"🔗 Username: {safe_user_text('@' + user.username)}\n"
+            if user.username
             else ""
         )
+        tg_link = f'<a href="tg://user?id={int(user.id)}">{full_name}</a>'
+        phone = _safe_val(order_row, "client_phone")
+        phone_line = f"📞 Телефон: {safe_user_text(phone)}\n" if phone else ""
 
         return (
             "👤 <b>Контакти клієнта</b>\n\n"
@@ -162,7 +164,7 @@ def register(dp):
             f"{phone_line}"
             f"{username_line}"
             f"Telegram: {tg_link}\n"
-            f"ID: <code>{user.id}</code>\n\n"
+            f"ID: <code>{int(user.id)}</code>\n\n"
             "Контакти відкрито після того, як клієнт обрав вас."
         )
 
@@ -908,15 +910,20 @@ def register(dp):
                 text=text,
             )
 
-            username_line = f"🔗 Username: @{message.from_user.username}\n" if message.from_user.username else ""
+            author_name = safe_user_text(message.from_user.full_name, "Користувач")
+            username_line = (
+                f"🔗 Username: {safe_user_text('@' + message.from_user.username)}\n"
+                if message.from_user.username
+                else ""
+            )
             admin_text = (
                 "⚠️ <b>Нова скарга</b>\n\n"
-                f"🆔 <b>Заявка:</b> #{order_id}\n"
-                f"👤 <b>Від кого:</b> {message.from_user.full_name}\n"
-                f"🆔 <b>ID автора:</b> <code>{message.from_user.id}</code>\n"
+                f"🆔 <b>Заявка:</b> #{safe_str(order_id)}\n"
+                f"👤 <b>Від кого:</b> {author_name}\n"
+                f"🆔 <b>ID автора:</b> <code>{int(message.from_user.id)}</code>\n"
                 f"{username_line}"
-                f"🎯 <b>На кого:</b> {against_role}\n"
-                f"🆔 <b>ID відповідача:</b> <code>{against_user_id}</code>\n\n"
+                f"🎯 <b>На кого:</b> {safe_user_text(against_role)}\n"
+                f"🆔 <b>ID відповідача:</b> <code>{safe_str(against_user_id)}</code>\n\n"
                 f"💬 <b>Текст скарги:</b>\n{text}"
             )
 
@@ -1038,9 +1045,9 @@ def register(dp):
                     result["selected_master_id"],
                     (
                         f"⭐ <b>Клієнт оцінив вашу роботу</b>\n\n"
-                        f"Заявка #{order_id}\n"
-                        f"Оцінка: <b>{rating_value}/5</b>\n"
-                        f"{f'Відгук: {review_text}' if review_text else 'Без текстового відгуку'}"
+                        f"Заявка #{safe_str(order_id)}\n"
+                        f"Оцінка: <b>{safe_str(rating_value)}/5</b>\n"
+                        f"{f'Відгук: {safe_user_text(review_text)}' if review_text else 'Без текстового відгуку'}"
                     ),
                 )
         except Exception as e:
