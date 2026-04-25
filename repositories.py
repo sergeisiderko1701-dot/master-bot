@@ -2117,3 +2117,103 @@ async def get_master_public_profile(master_user_id: int):
 
 async def get_master_reviews(master_user_id: int, limit: int = 5):
     return await get_master_recent_reviews(master_user_id, limit)
+
+# =========================
+# BLOCKED USERS
+# =========================
+
+async def ensure_blocked_users_table() -> None:
+    """
+    Backward-compatible runtime setup for blocked_users.
+
+    Used by admin/client logic to block abusive clients or users.
+    Safe to call multiple times.
+    """
+    await execute(
+        """
+        CREATE TABLE IF NOT EXISTS blocked_users (
+            user_id BIGINT PRIMARY KEY,
+            reason TEXT,
+            blocked_by_admin_id BIGINT,
+            created_at BIGINT
+        )
+        """
+    )
+
+
+async def block_user(user_id: int, admin_user_id: int, reason: Optional[str] = None) -> None:
+    """
+    Block a user from client/user actions.
+
+    For now this is used mainly for clients, but the table is generic by user_id.
+    """
+    await ensure_blocked_users_table()
+
+    await execute(
+        """
+        INSERT INTO blocked_users (
+            user_id,
+            reason,
+            blocked_by_admin_id,
+            created_at
+        )
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (user_id) DO UPDATE SET
+            reason=EXCLUDED.reason,
+            blocked_by_admin_id=EXCLUDED.blocked_by_admin_id,
+            created_at=EXCLUDED.created_at
+        """,
+        int(user_id),
+        reason,
+        int(admin_user_id) if admin_user_id is not None else None,
+        now_ts(),
+    )
+
+
+async def unblock_user(user_id: int) -> None:
+    """
+    Remove user block.
+    """
+    await ensure_blocked_users_table()
+
+    await execute(
+        """
+        DELETE FROM blocked_users
+        WHERE user_id=$1
+        """,
+        int(user_id),
+    )
+
+
+async def is_user_blocked(user_id: int) -> bool:
+    """
+    Return True if user is blocked.
+    """
+    await ensure_blocked_users_table()
+
+    row = await fetchrow(
+        """
+        SELECT 1
+        FROM blocked_users
+        WHERE user_id=$1
+        """,
+        int(user_id),
+    )
+    return bool(row)
+
+
+async def get_user_block_row(user_id: int):
+    """
+    Return block row for user, or None.
+    """
+    await ensure_blocked_users_table()
+
+    return await fetchrow(
+        """
+        SELECT *
+        FROM blocked_users
+        WHERE user_id=$1
+        """,
+        int(user_id),
+    )
+
