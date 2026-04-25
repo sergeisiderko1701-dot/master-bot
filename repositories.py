@@ -3,7 +3,7 @@ from typing import Optional
 import asyncpg
 
 from config import settings
-from constants import DISTRICT_ALL_ODESSA, normalize_categories_value, parse_categories
+from constants import DISTRICT_ALL_ODESSA, normalize_categories_value, parse_categories, parse_districts
 from db import get_pool
 from utils import now_ts
 
@@ -418,9 +418,42 @@ async def master_active_offers_count(master_user_id: int) -> int:
     return int(value or 0)
 
 
-async def list_new_orders_for_master(category_value):
+async def list_new_orders_for_master(category_value, district_value=None):
+    """
+    New orders visible to a master.
+
+    Filters by:
+    - master's selected categories;
+    - master's selected districts;
+    - if master selected "Вся Одеса", show all districts.
+
+    This prevents masters from seeing orders outside their working districts
+    when they open "🔔 Нові заявки" manually.
+    """
     categories = parse_categories(category_value)
     if not categories:
+        return []
+
+    districts = parse_districts(district_value)
+
+    # Master works across all Odessa: show all orders in selected categories.
+    if DISTRICT_ALL_ODESSA in districts:
+        return await fetch(
+            """
+            SELECT *
+            FROM orders
+            WHERE category = ANY($1::text[])
+              AND status = ANY($2::text[])
+              AND moderation_status='approved'
+            ORDER BY created_at DESC
+            LIMIT 50
+            """,
+            categories,
+            ["new", "offered"],
+        )
+
+    # No districts configured: do not show random city-wide orders.
+    if not districts:
         return []
 
     return await fetch(
@@ -428,12 +461,14 @@ async def list_new_orders_for_master(category_value):
         SELECT *
         FROM orders
         WHERE category = ANY($1::text[])
-          AND status = ANY($2::text[])
+          AND district = ANY($2::text[])
+          AND status = ANY($3::text[])
           AND moderation_status='approved'
         ORDER BY created_at DESC
         LIMIT 50
         """,
         categories,
+        districts,
         ["new", "offered"],
     )
 
