@@ -63,9 +63,26 @@ def main_menu_kb(is_admin_user: bool = False):
 
 def categories_kb():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    for label, _value in CATEGORIES:
-        kb.row(KeyboardButton(label))
-    kb.row(KeyboardButton("🏠 У меню"))
+
+    # 2 стовпчики × 3 рядки.
+    # Важливо: ці назви мають збігатися з labels у constants.CATEGORIES.
+    category_labels = [
+        "🔧 Сантехнік",
+        "⚡ Електрик",
+        "🔨 Майстер на годину",
+        "❄️ Кондиціонери",
+        "🔌 Ремонт техніки",
+        "🪟 Вікна / двері",
+    ]
+
+    available_labels = {label for label, _value in CATEGORIES}
+    visible_labels = [label for label in category_labels if label in available_labels]
+
+    for i in range(0, len(visible_labels), 2):
+        row = visible_labels[i:i + 2]
+        kb.row(*(KeyboardButton(label) for label in row))
+
+    kb.row(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
     return kb
 
 
