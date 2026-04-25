@@ -2217,3 +2217,97 @@ async def get_user_block_row(user_id: int):
         int(user_id),
     )
 
+# =========================
+# ADMIN USER SUMMARY
+# =========================
+
+async def get_user_admin_summary(user_id: int) -> dict:
+    """
+    Aggregated user history for admin panel.
+
+    Shows:
+    - orders totals and statuses;
+    - complaints from / against this user;
+    - master profile status if user is also a master;
+    - block status.
+    """
+    user_id = int(user_id)
+    await ensure_blocked_users_table()
+
+    orders_row = await fetchrow(
+        """
+        SELECT
+            COUNT(*) AS total_orders,
+            COUNT(*) FILTER (WHERE status IN ('new', 'offered', 'matched', 'in_progress')) AS active_orders,
+            COUNT(*) FILTER (WHERE status='done') AS done_orders,
+            COUNT(*) FILTER (WHERE status='cancelled') AS cancelled_orders,
+            COUNT(*) FILTER (WHERE status='expired') AS expired_orders,
+            COUNT(*) FILTER (WHERE is_suspect IS TRUE) AS suspect_orders,
+            MIN(created_at) AS first_order_at,
+            MAX(created_at) AS last_order_at
+        FROM orders
+        WHERE user_id=$1
+        """,
+        user_id,
+    )
+
+    complaints_from_row = await fetchrow(
+        """
+        SELECT COUNT(*) AS c
+        FROM complaints
+        WHERE from_user_id=$1
+        """,
+        user_id,
+    )
+
+    complaints_against_row = await fetchrow(
+        """
+        SELECT COUNT(*) AS c
+        FROM complaints
+        WHERE against_user_id=$1
+        """,
+        user_id,
+    )
+
+    master_row = await fetchrow(
+        """
+        SELECT
+            id,
+            user_id,
+            name,
+            status,
+            rating,
+            reviews_count,
+            category,
+            district,
+            availability,
+            last_seen
+        FROM masters
+        WHERE user_id=$1
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        user_id,
+    )
+
+    block_row = await get_user_block_row(user_id)
+
+    return {
+        "user_id": user_id,
+        "total_orders": int(orders_row["total_orders"] or 0) if orders_row else 0,
+        "active_orders": int(orders_row["active_orders"] or 0) if orders_row else 0,
+        "done_orders": int(orders_row["done_orders"] or 0) if orders_row else 0,
+        "cancelled_orders": int(orders_row["cancelled_orders"] or 0) if orders_row else 0,
+        "expired_orders": int(orders_row["expired_orders"] or 0) if orders_row else 0,
+        "suspect_orders": int(orders_row["suspect_orders"] or 0) if orders_row else 0,
+        "first_order_at": orders_row["first_order_at"] if orders_row else None,
+        "last_order_at": orders_row["last_order_at"] if orders_row else None,
+        "complaints_from": int(complaints_from_row["c"] or 0) if complaints_from_row else 0,
+        "complaints_against": int(complaints_against_row["c"] or 0) if complaints_against_row else 0,
+        "is_blocked": bool(block_row),
+        "block_reason": block_row["reason"] if block_row else None,
+        "blocked_by_admin_id": block_row["blocked_by_admin_id"] if block_row else None,
+        "blocked_at": block_row["created_at"] if block_row else None,
+        "master": master_row,
+    }
+
