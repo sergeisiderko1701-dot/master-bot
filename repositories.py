@@ -1051,7 +1051,7 @@ async def refuse_order(order_id: int):
                 SET status='active'
                 WHERE order_id=$1
                   AND status='rejected'
-                  AND ($2 IS NULL OR master_user_id <> $2)
+                  AND ($2::bigint IS NULL OR master_user_id <> $2::bigint)
                 """,
                 order_id,
                 selected_master_id,
