@@ -862,7 +862,7 @@ def register(dp):
 
         await touch_master_presence(message.from_user.id)
 
-        rows = await list_new_orders_for_master(master["category"])
+        rows = await list_new_orders_for_master(master["category"], master["district"])
         if not rows:
             await message.answer(
                 f"📭 <b>Нових заявок поки немає</b>\n\n"
