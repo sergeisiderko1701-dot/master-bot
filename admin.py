@@ -16,6 +16,9 @@ from config import settings
 from constants import status_label
 from keyboards import main_menu_kb
 from repositories import (
+    block_user,
+    unblock_user,
+    is_user_blocked,
     admin_funnel_stats,
     admin_stats,
     approve_suspicious_order,
@@ -206,6 +209,8 @@ def admin_complaint_actions_inline(complaint_id: int, order_id: int, against_use
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("📄 Відкрити заявку", callback_data=f"admin_order_detail_{order_id}"))
     kb.add(InlineKeyboardButton("👷 Відкрити майстра", callback_data=f"admin_open_master_by_user_{against_user_id}"))
+    kb.add(InlineKeyboardButton("🚫 Заблокувати користувача", callback_data=f"admin_block_user_{against_user_id}"))
+    kb.add(InlineKeyboardButton("✅ Розблокувати користувача", callback_data=f"admin_unblock_user_{against_user_id}"))
     kb.add(InlineKeyboardButton("🗑 Видалити скаргу", callback_data=f"admin_delete_complaint_{complaint_id}"))
     return kb
 
@@ -1377,10 +1382,22 @@ def register(dp):
             await message.answer("Заявок цього користувача не знайдено.", reply_markup=admin_menu_kb())
             return
 
+        block_row = await is_user_blocked(user_id)
+        block_status = "🚫 заблокований" if block_row else "✅ активний"
+
+        user_kb = InlineKeyboardMarkup(row_width=1)
+        if block_row:
+            user_kb.add(InlineKeyboardButton("✅ Розблокувати користувача", callback_data=f"admin_unblock_user_{user_id}"))
+        else:
+            user_kb.add(InlineKeyboardButton("🚫 Заблокувати користувача", callback_data=f"admin_block_user_{user_id}"))
+
         await message.answer(
-            f"👤 <b>Користувач {user_id}</b>\nЗнайдено заявок: <b>{len(rows)}</b>",
-            reply_markup=admin_menu_kb(),
+            f"👤 <b>Користувач {user_id}</b>\n"
+            f"Статус: <b>{block_status}</b>\n"
+            f"Знайдено заявок: <b>{len(rows)}</b>",
+            reply_markup=user_kb,
         )
+        await message.answer("Меню:", reply_markup=admin_menu_kb())
 
         for row in rows:
             await send_order_card(
@@ -1476,6 +1493,58 @@ def register(dp):
         await _finish_callback_action(
             call,
             text_for_chat="🗑 Скаргу видалено.",
+        )
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_block_user_"), state="*")
+    async def admin_block_user_handler(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            await call.answer()
+            return
+
+        user_id = int(call.data.split("_")[-1])
+
+        await block_user(
+            user_id=user_id,
+            admin_user_id=call.from_user.id,
+            reason="Blocked by admin",
+        )
+
+        try:
+            await dp.bot.send_message(
+                user_id,
+                "🚫 <b>Вас заблоковано адміністратором</b>\n\n"
+                "Ви не можете створювати заявки.",
+            )
+        except Exception:
+            pass
+
+        await _finish_callback_action(
+            call,
+            text_for_chat=f"🚫 Користувача <code>{user_id}</code> заблоковано.",
+        )
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("admin_unblock_user_"), state="*")
+    async def admin_unblock_user_handler(call: types.CallbackQuery, state: FSMContext):
+        if not is_admin(call.from_user.id):
+            await call.answer()
+            return
+
+        user_id = int(call.data.split("_")[-1])
+
+        await unblock_user(user_id)
+
+        try:
+            await dp.bot.send_message(
+                user_id,
+                "✅ <b>Вас розблоковано</b>\n\n"
+                "Тепер ви можете користуватися ботом.",
+            )
+        except Exception:
+            pass
+
+        await _finish_callback_action(
+            call,
+            text_for_chat=f"✅ Користувача <code>{user_id}</code> розблоковано.",
         )
 
     @dp.callback_query_handler(lambda c: c.data.startswith("support_reply_"), state="*")
