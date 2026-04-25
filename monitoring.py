@@ -4,6 +4,7 @@ import logging
 from config import settings
 from notification_queue import process_notification_jobs
 from notification_recovery import recover_stale_notification_jobs
+from notification_indexes import ensure_notification_jobs_unique_index
 from keyboards import (
     admin_order_actions_inline,
     client_order_actions_inline,
@@ -396,6 +397,11 @@ async def stale_orders_watcher(bot, shutdown_event: asyncio.Event):
         CLIENT_FINISH_REMINDER_AFTER_SECONDS,
         NOTIFICATION_JOB_PROCESSING_STALE_AFTER_SECONDS,
     )
+
+    try:
+        await ensure_notification_jobs_unique_index()
+    except Exception:
+        logger.exception("Failed to ensure notification jobs unique index")
 
     last_stale_check_at = 0
     last_recovery_check_at = 0
