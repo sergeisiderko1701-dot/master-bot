@@ -1051,7 +1051,7 @@ async def refuse_order(order_id: int):
                 SET status='active'
                 WHERE order_id=$1
                   AND status='rejected'
-                  AND ($2::bigint IS NULL OR master_user_id <> $2::bigint)
+                  AND ($2 IS NULL OR master_user_id <> $2)
                 """,
                 order_id,
                 selected_master_id,
@@ -1891,7 +1891,48 @@ async def mark_notification_job_failed(job_id: int, error_text: str):
 # PUBLIC MASTER LIST / REVIEWS
 # =========================
 
-async def list_public_masters_for_category(category: str, limit: int = 10):
+async def list_public_masters_for_category(category: str, district: Optional[str] = None, limit: int = 10):
+    """
+    Public masters list for client "Майстри поруч".
+    If district is provided, show only masters who selected this district or "Вся Одеса".
+    """
+    if district:
+        return await fetch(
+            """
+            SELECT
+                user_id,
+                name,
+                category,
+                district,
+                description,
+                experience,
+                photo,
+                rating,
+                reviews_count,
+                availability,
+                last_seen,
+                status
+            FROM masters
+            WHERE status='approved'
+              AND $1 = ANY(string_to_array(category, ','))
+              AND (
+                    $2 = ANY(string_to_array(COALESCE(district, ''), ','))
+                    OR $3 = ANY(string_to_array(COALESCE(district, ''), ','))
+              )
+            ORDER BY
+                CASE WHEN availability='online' THEN 0 ELSE 1 END,
+                rating DESC,
+                reviews_count DESC,
+                last_seen DESC,
+                name ASC
+            LIMIT $4
+            """,
+            category,
+            district,
+            DISTRICT_ALL_ODESSA,
+            limit,
+        )
+
     return await fetch(
         """
         SELECT
