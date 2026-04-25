@@ -103,39 +103,59 @@ def request_contact_kb():
     return kb
 
 
+async def _show_client_actions_for_selected_location(message_or_call, state: FSMContext):
+    data = await state.get_data()
+    category = data.get("client_category")
+    district = data.get("client_district")
+
+    target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
+
+    if not category:
+        await target.answer(choose_category_text(), reply_markup=categories_kb())
+        return
+
+    if not district:
+        await target.answer(ask_district_text(), reply_markup=back_menu_kb())
+        await target.answer("Оберіть район:", reply_markup=client_districts_inline_kb())
+        return
+
+    await target.answer(
+        f"{client_actions_text(category)}\n\n"
+        f"📍 <b>Район:</b> {safe_user_text(district)}\n\n"
+        "Тепер можете переглянути майстрів у цьому районі або створити заявку.",
+        reply_markup=client_actions_kb(),
+    )
+
+
 def register(dp):
     @dp.message_handler(lambda m: m.text in {"👤 Клієнт", "👤 Знайти майстра"}, state="*")
     async def client_menu(message: types.Message, state: FSMContext):
         data = await state.get_data()
         category = data.get("client_category")
+        district = data.get("client_district")
 
         await state.finish()
 
         if category:
-            await state.update_data(client_category=category)
-            await message.answer(
-                client_actions_text(category),
-                reply_markup=client_actions_kb(),
-            )
-            return
+            await state.update_data(client_category=category, client_district=district)
+            if district:
+                await _show_client_actions_for_selected_location(message, state)
+                return
 
-        await message.answer(
-            choose_category_text(),
-            reply_markup=categories_kb(),
-        )
+        await message.answer(choose_category_text(), reply_markup=categories_kb())
 
     @dp.message_handler(lambda m: m.text in CHANGE_CATEGORY_BUTTONS, state="*")
     async def change_category(message: types.Message, state: FSMContext):
-        await state.update_data(client_category=None)
-        await message.answer(
-            choose_category_text(),
-            reply_markup=categories_kb(),
-        )
+        await state.finish()
+        await state.update_data(client_category=None, client_district=None)
+        await message.answer(choose_category_text(), reply_markup=categories_kb())
 
     @dp.message_handler(lambda m: m.text in BACK_BUTTONS, state="*")
     async def back_handler(message: types.Message, state: FSMContext):
         current_state = await state.get_state()
         data = await state.get_data()
+        category = data.get("client_category")
+        district = data.get("client_district")
 
         if current_state in (
             ClientCreateOrder.district.state,
@@ -144,110 +164,185 @@ def register(dp):
             ClientCreateOrder.phone.state,
             ClientCreateOrder.media.state,
         ):
-            category = data.get("client_category")
             await state.finish()
+            await state.update_data(client_category=category, client_district=district)
 
-            if category:
-                await state.update_data(client_category=category)
-                await message.answer(
-                    client_actions_text(category),
-                    reply_markup=client_actions_kb(),
-                )
+            if category and district:
+                await _show_client_actions_for_selected_location(message, state)
+            elif category:
+                await ClientCreateOrder.district.set()
+                await message.answer(ask_district_text(), reply_markup=back_menu_kb())
+                await message.answer("Оберіть район:", reply_markup=client_districts_inline_kb())
             else:
-                await message.answer(
-                    choose_category_text(),
-                    reply_markup=categories_kb(),
-                )
+                await message.answer(choose_category_text(), reply_markup=categories_kb())
             return
 
-        category = data.get("client_category")
-        if category:
-            await message.answer(
-                client_actions_text(category),
-                reply_markup=client_actions_kb(),
-            )
+        if category and district:
+            await _show_client_actions_for_selected_location(message, state)
             return
 
-        await message.answer(
-            choose_category_text(),
-            reply_markup=categories_kb(),
-        )
+        await message.answer(choose_category_text(), reply_markup=categories_kb())
 
     @dp.message_handler(lambda m: m.text in CATEGORY_LABEL_TO_VALUE.keys(), state="*")
     async def choose_category(message: types.Message, state: FSMContext):
         category = CATEGORY_LABEL_TO_VALUE[message.text]
-        await state.update_data(client_category=category)
+        await state.finish()
+        await state.update_data(client_category=category, client_district=None)
+        await ClientCreateOrder.district.set()
+
         await message.answer(
-            client_actions_text(category),
-            reply_markup=client_actions_kb(),
+            f"✅ <b>Обрана послуга:</b> {category_label(category)}"
         )
+        await message.answer(ask_district_text(), reply_markup=back_menu_kb())
+        await message.answer("Оберіть район:", reply_markup=client_districts_inline_kb())
         await message.answer(tip_after_category())
 
-    async def _start_order_flow_from_category(message_or_call, state: FSMContext, category: str):
+    @dp.callback_query_handler(lambda c: c.data == "client_district_back", state=ClientCreateOrder.district)
+    async def client_district_back(call: types.CallbackQuery, state: FSMContext):
+        await state.finish()
+        await state.update_data(client_category=None, client_district=None)
+        await call.message.answer(choose_category_text(), reply_markup=categories_kb())
+        await call.answer("Назад")
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("client_district_"), state=ClientCreateOrder.district)
+    async def client_choose_district_after_category(call: types.CallbackQuery, state: FSMContext):
+        district = call.data.split("client_district_", 1)[1].strip()
+
+        if district not in VALID_ODESSA_DISTRICTS:
+            await call.answer("Некоректний район", show_alert=True)
+            return
+
+        data = await state.get_data()
+        category = data.get("client_category")
+
+        if not category:
+            await state.finish()
+            await call.message.answer(choose_category_text(), reply_markup=categories_kb())
+            await call.answer("Спочатку оберіть послугу")
+            return
+
+        await state.finish()
+        await state.update_data(client_category=category, client_district=district)
+
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await call.message.answer(
+            f"✅ <b>Район:</b> {safe_user_text(district)}"
+        )
+        await _show_client_actions_for_selected_location(call, state)
+        await call.answer("Район обрано")
+
+    @dp.message_handler(state=ClientCreateOrder.district, content_types=types.ContentTypes.TEXT)
+    async def client_order_district_text_block(message: types.Message, state: FSMContext):
+        await message.answer("Будь ласка, оберіть район кнопкою нижче.", reply_markup=back_menu_kb())
+        await message.answer("Оберіть район:", reply_markup=client_districts_inline_kb())
+
+    async def _start_order_flow_from_saved_location(message_or_call, state: FSMContext):
         user_id = message_or_call.from_user.id
-        answer_target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
+        target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
+        data = await state.get_data()
+        category = data.get("client_category")
+        district = data.get("client_district")
+
+        if not category:
+            await target.answer("Спочатку оберіть послугу.", reply_markup=categories_kb())
+            return False
+
+        if not district:
+            await ClientCreateOrder.district.set()
+            await target.answer(ask_district_text(), reply_markup=back_menu_kb())
+            await target.answer("Оберіть район:", reply_markup=client_districts_inline_kb())
+            return False
 
         prev = await get_cooldown(user_id, "client_create_order")
         current = now_ts()
 
         if current - prev < settings.client_order_cooldown:
             left_seconds = settings.client_order_cooldown - (current - prev)
-            await answer_target.answer(
-                f"Зачекайте {left_seconds} сек перед новою заявкою.",
-                reply_markup=client_actions_kb(),
-            )
+            await target.answer(f"Зачекайте {left_seconds} сек перед новою заявкою.", reply_markup=client_actions_kb())
             return False
 
         active_count = await client_active_orders_count(user_id)
         if active_count >= settings.max_active_client_orders:
-            await answer_target.answer(
-                "У вас вже занадто багато активних заявок.",
-                reply_markup=client_actions_kb(),
-            )
+            await target.answer("У вас вже занадто багато активних заявок.", reply_markup=client_actions_kb())
             return False
 
-        await state.finish()
-        await state.update_data(client_category=category)
-        await ClientCreateOrder.district.set()
-        await answer_target.answer(ask_district_text(), reply_markup=back_menu_kb())
-        await answer_target.answer("Оберіть район:", reply_markup=client_districts_inline_kb())
+        await ClientCreateOrder.address.set()
+        await target.answer(
+            f"📍 <b>Район:</b> {safe_user_text(district)}\n\n"
+            f"{ask_address_text()}",
+            reply_markup=back_menu_kb(),
+        )
         return True
 
-    async def _show_nearby_masters(message_or_call, state: FSMContext, category: str):
-        masters = await list_public_masters_for_category(category, 10)
-        answer_target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
+    async def _show_nearby_masters(message_or_call, state: FSMContext, category: str, district: str | None = None):
+        target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
+        masters = await list_public_masters_for_category(category, district, 10)
 
         if not masters:
-            await answer_target.answer(no_nearby_masters_text(category), reply_markup=client_actions_kb())
+            if district:
+                await target.answer(
+                    f"😕 <b>У районі {safe_user_text(district)} поки немає майстрів: {category_label(category)}</b>\n\n"
+                    "Можете створити заявку — ми покажемо її майстрам, які працюють у цьому районі або по всій Одесі.",
+                    reply_markup=client_actions_kb(),
+                )
+            else:
+                await target.answer(no_nearby_masters_text(category), reply_markup=client_actions_kb())
             return
 
-        await answer_target.answer(nearby_masters_intro_text(category, len(masters)), reply_markup=client_actions_kb())
+        if district:
+            await target.answer(
+                f"👷 <b>Майстри поруч</b>\n\n"
+                f"🔧 {category_label(category)}\n"
+                f"📍 Район: {safe_user_text(district)}\n"
+                f"Знайдено майстрів: <b>{len(masters)}</b>",
+                reply_markup=client_actions_kb(),
+            )
+        else:
+            await target.answer(nearby_masters_intro_text(category, len(masters)), reply_markup=client_actions_kb())
 
         for master in masters:
             try:
-                await answer_target.answer(
+                await target.answer(
                     public_master_card_text(master),
                     reply_markup=nearby_master_actions_inline(master["user_id"], category),
                 )
             except Exception:
-                logger.exception("Failed to show nearby master user_id=%s category=%s", master["user_id"] if master and "user_id" in master else "?", category)
+                logger.exception(
+                    "Failed to show nearby master user_id=%s category=%s district=%s",
+                    master["user_id"] if master and "user_id" in master else "?",
+                    category,
+                    district,
+                )
 
     @dp.message_handler(lambda m: m.text == "👷 Майстри поруч", state="*")
     async def nearby_masters(message: types.Message, state: FSMContext):
         data = await state.get_data()
         category = data.get("client_category")
+        district = data.get("client_district")
 
         if not category:
             await message.answer("Спочатку оберіть послугу.", reply_markup=categories_kb())
             return
 
-        await _show_nearby_masters(message, state, category)
+        if not district:
+            await ClientCreateOrder.district.set()
+            await message.answer(ask_district_text(), reply_markup=back_menu_kb())
+            await message.answer("Оберіть район:", reply_markup=client_districts_inline_kb())
+            return
+
+        await _show_nearby_masters(message, state, category, district)
 
     @dp.callback_query_handler(lambda c: c.data.startswith("nearby_masters_"), state="*")
     async def nearby_masters_callback(call: types.CallbackQuery, state: FSMContext):
         category = call.data.split("nearby_masters_", 1)[1]
+        data = await state.get_data()
+        district = data.get("client_district")
         await state.update_data(client_category=category)
-        await _show_nearby_masters(call, state, category)
+        await _show_nearby_masters(call, state, category, district)
         await call.answer()
 
     @dp.callback_query_handler(lambda c: c.data.startswith("nearby_master_profile_"), state="*")
@@ -271,77 +366,34 @@ def register(dp):
     @dp.callback_query_handler(lambda c: c.data.startswith("nearby_create_order_"), state="*")
     async def nearby_create_order(call: types.CallbackQuery, state: FSMContext):
         category = call.data.split("nearby_create_order_", 1)[1]
+        data = await state.get_data()
+        district = data.get("client_district")
+
         await state.update_data(client_category=category)
-        started = await _start_order_flow_from_category(call, state, category)
+
+        if not district:
+            await ClientCreateOrder.district.set()
+            await call.message.answer(ask_district_text(), reply_markup=back_menu_kb())
+            await call.message.answer("Оберіть район:", reply_markup=client_districts_inline_kb())
+            await call.answer("Оберіть район")
+            return
+
+        started = await _start_order_flow_from_saved_location(call, state)
         await call.answer("Створення заявки" if started else "")
 
     @dp.message_handler(lambda m: m.text in {"📨 Створити заявку", "📝 Створити заявку"}, state="*")
     async def create_order_start(message: types.Message, state: FSMContext):
-        allowed = await allow_message_action(message, action_key="client_create_order_click", limit=5, window_seconds=60, mute_seconds=300)
+        allowed = await allow_message_action(
+            message,
+            action_key="client_create_order_click",
+            limit=5,
+            window_seconds=60,
+            mute_seconds=300,
+        )
         if not allowed:
             return
 
-        data = await state.get_data()
-        category = data.get("client_category")
-
-        if not category:
-            await message.answer("Спочатку оберіть категорію.", reply_markup=categories_kb())
-            return
-
-        prev = await get_cooldown(message.from_user.id, "client_create_order")
-        current = now_ts()
-
-        if current - prev < settings.client_order_cooldown:
-            left_seconds = settings.client_order_cooldown - (current - prev)
-            await message.answer(f"Зачекайте {left_seconds} сек перед новою заявкою.", reply_markup=client_actions_kb())
-            return
-
-        active_count = await client_active_orders_count(message.from_user.id)
-        if active_count >= settings.max_active_client_orders:
-            await message.answer("У вас вже занадто багато активних заявок.", reply_markup=client_actions_kb())
-            return
-
-        await ClientCreateOrder.district.set()
-        await message.answer(ask_district_text(), reply_markup=back_menu_kb())
-        await message.answer("Оберіть район:", reply_markup=client_districts_inline_kb())
-
-    @dp.callback_query_handler(lambda c: c.data == "client_district_back", state=ClientCreateOrder.district)
-    async def client_district_back(call: types.CallbackQuery, state: FSMContext):
-        category = (await state.get_data()).get("client_category")
-        await state.finish()
-
-        if category:
-            await state.update_data(client_category=category)
-            await call.message.answer(client_actions_text(category), reply_markup=client_actions_kb())
-        else:
-            await call.message.answer(choose_category_text(), reply_markup=categories_kb())
-
-        await call.answer("Назад")
-
-    @dp.callback_query_handler(lambda c: c.data.startswith("client_district_"), state=ClientCreateOrder.district)
-    async def client_order_district_callback(call: types.CallbackQuery, state: FSMContext):
-        district = call.data.split("client_district_", 1)[1].strip()
-
-        if district not in VALID_ODESSA_DISTRICTS:
-            await call.answer("Некоректний район", show_alert=True)
-            return
-
-        await state.update_data(district=district)
-        await ClientCreateOrder.address.set()
-
-        try:
-            await call.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-
-        await call.message.answer(f"✅ <b>Район:</b> {safe_user_text(district)}")
-        await call.message.answer(ask_address_text(), reply_markup=back_menu_kb())
-        await call.answer("Район обрано")
-
-    @dp.message_handler(state=ClientCreateOrder.district, content_types=types.ContentTypes.TEXT)
-    async def client_order_district_text_block(message: types.Message, state: FSMContext):
-        await message.answer("Будь ласка, оберіть район кнопкою нижче.", reply_markup=back_menu_kb())
-        await message.answer("Оберіть район:", reply_markup=client_districts_inline_kb())
+        await _start_order_flow_from_saved_location(message, state)
 
     @dp.message_handler(state=ClientCreateOrder.address, content_types=types.ContentTypes.TEXT)
     async def client_order_address(message: types.Message, state: FSMContext):
@@ -400,13 +452,10 @@ def register(dp):
 
         if text in BACK_BUTTONS:
             category = (await state.get_data()).get("client_category")
+            district = (await state.get_data()).get("client_district")
             await state.finish()
-
-            if category:
-                await state.update_data(client_category=category)
-                await message.answer(client_actions_text(category), reply_markup=client_actions_kb())
-            else:
-                await message.answer(choose_category_text(), reply_markup=categories_kb())
+            await state.update_data(client_category=category, client_district=district)
+            await _show_client_actions_for_selected_location(message, state)
             return
 
         phone = normalize_phone(text)
@@ -425,7 +474,7 @@ def register(dp):
         return (
             "📋 <b>Перевірте заявку перед відправкою</b>\n\n"
             f"🔧 <b>Категорія:</b> {category_label(data.get('client_category'))}\n"
-            f"📍 <b>Район:</b> {safe_user_text(data.get('district') or '—')}\n"
+            f"📍 <b>Район:</b> {safe_user_text(data.get('client_district') or data.get('district') or '—')}\n"
             f"🏠 <b>Адреса:</b> {safe_user_text(data.get('client_address') or '—')}\n"
             f"📝 <b>Проблема:</b> {safe_user_text(data.get('problem') or '—')}\n"
             f"📞 <b>Телефон:</b> {safe_user_text(data.get('client_phone') or '—')}\n"
@@ -438,8 +487,11 @@ def register(dp):
         user_id = message_or_call.from_user.id
         answer_target = message_or_call.message if isinstance(message_or_call, types.CallbackQuery) else message_or_call
 
-        required = ["client_category", "district", "client_address", "problem", "client_phone"]
-        if any(not data.get(key) for key in required):
+        category = data.get("client_category")
+        district = data.get("client_district") or data.get("district")
+
+        required_values = [category, district, data.get("client_address"), data.get("problem"), data.get("client_phone")]
+        if any(not value for value in required_values):
             await state.finish()
             await answer_target.answer("Не вдалося створити заявку: частина даних втрачена. Заповніть заявку ще раз.", reply_markup=main_menu_kb(is_admin_user=is_admin(user_id)))
             return
@@ -460,8 +512,8 @@ def register(dp):
 
         order_id = await create_order(
             user_id=user_id,
-            category=data["client_category"],
-            district=data.get("district", ""),
+            category=category,
+            district=district,
             problem=data.get("problem", ""),
             client_address=data.get("client_address", ""),
             media_type=data.get("media_type"),
@@ -476,7 +528,7 @@ def register(dp):
         await set_cooldown(user_id, "client_create_order", now_ts())
         order_row = await get_order_row(order_id)
 
-        logger.info("ORDER CREATED id=%s category=%s district=%s suspect=%s score=%s moderation=%s", order_id, data["client_category"], data.get("district"), antifake.is_suspect, antifake.score, moderation_status)
+        logger.info("ORDER CREATED id=%s category=%s district=%s suspect=%s score=%s moderation=%s", order_id, category, district, antifake.is_suspect, antifake.score, moderation_status)
 
         try:
             await notify_admin_about_order(dp.bot, settings.admin_id, order_row)
@@ -484,7 +536,7 @@ def register(dp):
             logger.warning("Помилка повідомлення адміну по заявці %s: %s", order_id, e)
 
         await state.finish()
-        await state.update_data(client_category=data["client_category"])
+        await state.update_data(client_category=category, client_district=district)
 
         if antifake.is_suspect:
             try:
@@ -496,7 +548,7 @@ def register(dp):
                         f"🆔 #{order_id}\n"
                         f"👤 user_id: <code>{user_id}</code>\n"
                         f"📞 Телефон: {safe_user_text(data.get('client_phone') or '—')}\n"
-                        f"📍 Район: {safe_user_text(data.get('district') or '—')}\n"
+                        f"📍 Район: {safe_user_text(district or '—')}\n"
                         f"🏠 Адреса: {safe_user_text(data.get('client_address') or '—')}\n"
                         f"📝 Проблема: {safe_user_text(data.get('problem') or '—')}\n\n"
                         f"⚠️ Причини:\n{safe_user_text(reasons_text)}"
@@ -508,8 +560,8 @@ def register(dp):
             await answer_target.answer(order_sent_to_review_text(order_id, antifake.reasons), reply_markup=main_menu_kb(is_admin_user=is_admin(user_id)))
             return
 
-        masters = await list_approved_masters_for_category(data["client_category"], data.get("district"))
-        logger.info("FILTERED MASTERS FOR ORDER=%s district=%s -> %s", order_id, data.get("district"), len(masters))
+        masters = await list_approved_masters_for_category(category, district)
+        logger.info("FILTERED MASTERS FOR ORDER=%s district=%s -> %s", order_id, district, len(masters))
 
         try:
             await notify_masters_about_order(dp.bot, order_row, masters)
@@ -562,21 +614,29 @@ def register(dp):
     async def client_order_submit_edit(call: types.CallbackQuery, state: FSMContext):
         data = await state.get_data()
         category = data.get("client_category")
+        district = data.get("client_district")
         await state.finish()
-        if category:
-            await state.update_data(client_category=category)
-        await ClientCreateOrder.district.set()
-        await call.message.answer("Добре, заповнимо заявку заново.\n\n" + ask_district_text(), reply_markup=back_menu_kb())
-        await call.message.answer("Оберіть район:", reply_markup=client_districts_inline_kb())
+        await state.update_data(client_category=category, client_district=district)
+
+        if category and district:
+            await ClientCreateOrder.address.set()
+            await call.message.answer("Добре, заповнимо заявку заново.\n\n" + ask_address_text(), reply_markup=back_menu_kb())
+        elif category:
+            await ClientCreateOrder.district.set()
+            await call.message.answer(ask_district_text(), reply_markup=back_menu_kb())
+            await call.message.answer("Оберіть район:", reply_markup=client_districts_inline_kb())
+        else:
+            await call.message.answer(choose_category_text(), reply_markup=categories_kb())
+
         await call.answer("Редагування")
 
     @dp.callback_query_handler(lambda c: c.data == "client_order_submit_cancel", state=ClientCreateOrder.media)
     async def client_order_submit_cancel(call: types.CallbackQuery, state: FSMContext):
         data = await state.get_data()
         category = data.get("client_category")
+        district = data.get("client_district")
         await state.finish()
-        if category:
-            await state.update_data(client_category=category)
+        await state.update_data(client_category=category, client_district=district)
         await call.message.answer("❌ <b>Створення заявки скасовано</b>", reply_markup=client_actions_kb())
         await call.answer("Скасовано")
 
