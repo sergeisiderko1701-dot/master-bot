@@ -16,6 +16,7 @@ from config import settings
 from constants import status_label
 from keyboards import main_menu_kb
 from repositories import (
+    get_user_admin_summary,
     block_user,
     unblock_user,
     is_user_blocked,
@@ -1365,39 +1366,52 @@ def register(dp):
             return
 
         user_id = int(text)
+        await state.finish()
+
+        summary = await get_user_admin_summary(user_id)
+
+        header = (
+            f"👤 <b>Користувач {user_id}</b>
+"
+            f"🚫 Блок: <b>{'так' if summary['is_blocked'] else 'ні'}</b>
+"
+            f"📦 Всього заявок: <b>{summary['total_orders']}</b>
+"
+            f"🛠 Активні: <b>{summary['active_orders']}</b>
+"
+            f"✅ Завершені: <b>{summary['done_orders']}</b>
+"
+            f"❌ Скасовані: <b>{summary['cancelled_orders']}</b>
+"
+            f"⌛ Прострочені: <b>{summary['expired_orders']}</b>
+"
+            f"⚠️ Скарги від: <b>{summary['complaints_from']}</b>
+"
+            f"⚠️ Скарги на: <b>{summary['complaints_against']}</b>"
+        )
+
+        kb = InlineKeyboardMarkup(row_width=1)
+        if summary["is_blocked"]:
+            kb.add(InlineKeyboardButton("✅ Розблокувати", callback_data=f"admin_unblock_user_{user_id}"))
+        else:
+            kb.add(InlineKeyboardButton("🚫 Заблокувати", callback_data=f"admin_block_user_{user_id}"))
+
+        await message.answer(header, reply_markup=kb)
+
         rows = await fetch(
             """
             SELECT *
             FROM orders
             WHERE user_id=$1
-            ORDER BY created_at DESC, id DESC
+            ORDER BY created_at DESC
             LIMIT 20
             """,
             user_id,
         )
 
-        await state.finish()
-
         if not rows:
-            await message.answer("Заявок цього користувача не знайдено.", reply_markup=admin_menu_kb())
+            await message.answer("Заявок не знайдено.", reply_markup=admin_menu_kb())
             return
-
-        block_row = await is_user_blocked(user_id)
-        block_status = "🚫 заблокований" if block_row else "✅ активний"
-
-        user_kb = InlineKeyboardMarkup(row_width=1)
-        if block_row:
-            user_kb.add(InlineKeyboardButton("✅ Розблокувати користувача", callback_data=f"admin_unblock_user_{user_id}"))
-        else:
-            user_kb.add(InlineKeyboardButton("🚫 Заблокувати користувача", callback_data=f"admin_block_user_{user_id}"))
-
-        await message.answer(
-            f"👤 <b>Користувач {user_id}</b>\n"
-            f"Статус: <b>{block_status}</b>\n"
-            f"Знайдено заявок: <b>{len(rows)}</b>",
-            reply_markup=user_kb,
-        )
-        await message.answer("Меню:", reply_markup=admin_menu_kb())
 
         for row in rows:
             await send_order_card(
