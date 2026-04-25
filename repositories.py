@@ -3,7 +3,7 @@ from typing import Optional
 import asyncpg
 
 from config import settings
-from constants import normalize_categories_value, parse_categories
+from constants import DISTRICT_ALL_ODESSA, normalize_categories_value, parse_categories
 from db import get_pool
 from utils import now_ts
 
@@ -65,6 +65,14 @@ async def fetchval(query: str, *args):
 
 async def execute(query: str, *args):
     return await _run_with_retry("execute", query, *args)
+
+
+async def ensure_order_client_address_column() -> None:
+    """
+    Backward-compatible migration for client_address.
+    Safe to call multiple times.
+    """
+    await execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS client_address TEXT")
 
 
 # =========================
@@ -430,10 +438,32 @@ async def list_new_orders_for_master(category_value):
     )
 
 
-async def list_approved_masters_for_category(category: str):
+async def list_approved_masters_for_category(category: str, district: Optional[str] = None):
+    """
+    Approved masters by category.
+    If district is provided, returns only masters who work in that district
+    or selected "Вся Одеса".
+    """
+    if district:
+        return await fetch(
+            """
+            SELECT user_id, category, status, district
+            FROM masters
+            WHERE status='approved'
+              AND $1 = ANY(string_to_array(category, ','))
+              AND (
+                    $2 = ANY(string_to_array(COALESCE(district, ''), ','))
+                    OR $3 = ANY(string_to_array(COALESCE(district, ''), ','))
+              )
+            """,
+            category,
+            district,
+            DISTRICT_ALL_ODESSA,
+        )
+
     return await fetch(
         """
-        SELECT user_id, category, status
+        SELECT user_id, category, status, district
         FROM masters
         WHERE status='approved'
           AND $1 = ANY(string_to_array(category, ','))
@@ -599,6 +629,7 @@ async def create_order(
     category: str,
     district: str,
     problem: str,
+    client_address: Optional[str] = None,
     media_type: Optional[str] = None,
     media_file_id: Optional[str] = None,
     client_phone: Optional[str] = None,
@@ -607,6 +638,8 @@ async def create_order(
     suspicion_reasons: Optional[str] = None,
     moderation_status: str = "approved",
 ) -> int:
+    await ensure_order_client_address_column()
+
     ts = now_ts()
     row = await fetchrow(
         """
@@ -614,6 +647,7 @@ async def create_order(
             user_id,
             category,
             district,
+            client_address,
             problem,
             client_phone,
             media_type,
@@ -627,16 +661,17 @@ async def create_order(
             updated_at
         )
         VALUES(
-            $1, $2, $3, $4, $5, $6, $7,
+            $1, $2, $3, $4, $5, $6, $7, $8,
             'new',
-            $8, $9, $10, $11,
-            $12, $12
+            $9, $10, $11, $12,
+            $13, $13
         )
         RETURNING id
         """,
         user_id,
         category,
         district,
+        client_address,
         problem,
         client_phone,
         media_type,
@@ -657,7 +692,7 @@ async def create_order(
         actor_user_id=user_id,
         actor_role="client",
         payload=(
-            f"category={category};district={district or ''};"
+            f"category={category};district={district or ''};address={client_address or ''};"
             f"is_suspect={int(bool(is_suspect))};moderation_status={moderation_status}"
         ),
     )
