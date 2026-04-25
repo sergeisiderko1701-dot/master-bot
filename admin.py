@@ -1371,32 +1371,42 @@ def register(dp):
         summary = await get_user_admin_summary(user_id)
 
         header = (
-            f"👤 <b>Користувач {user_id}</b>
-"
-            f"🚫 Блок: <b>{'так' if summary['is_blocked'] else 'ні'}</b>
-"
-            f"📦 Всього заявок: <b>{summary['total_orders']}</b>
-"
-            f"🛠 Активні: <b>{summary['active_orders']}</b>
-"
-            f"✅ Завершені: <b>{summary['done_orders']}</b>
-"
-            f"❌ Скасовані: <b>{summary['cancelled_orders']}</b>
-"
-            f"⌛ Прострочені: <b>{summary['expired_orders']}</b>
-"
-            f"⚠️ Скарги від: <b>{summary['complaints_from']}</b>
-"
+            f"👤 <b>Користувач {user_id}</b>\n"
+            f"🚫 Блок: <b>{'так' if summary['is_blocked'] else 'ні'}</b>\n"
+            f"📦 Всього заявок: <b>{summary['total_orders']}</b>\n"
+            f"🛠 Активні: <b>{summary['active_orders']}</b>\n"
+            f"✅ Завершені: <b>{summary['done_orders']}</b>\n"
+            f"❌ Скасовані: <b>{summary['cancelled_orders']}</b>\n"
+            f"⌛ Прострочені: <b>{summary['expired_orders']}</b>\n"
+            f"⚠️ Підозрілі: <b>{summary['suspect_orders']}</b>\n"
+            f"⚠️ Скарги від: <b>{summary['complaints_from']}</b>\n"
             f"⚠️ Скарги на: <b>{summary['complaints_against']}</b>"
         )
 
+        master = summary.get("master")
+        if master:
+            header += (
+                "\n\n"
+                "👷 <b>Також є профіль майстра</b>\n"
+                f"Статус майстра: <b>{master['status']}</b>\n"
+                f"⭐ Рейтинг: <b>{float(master['rating'] or 0):.2f}</b>\n"
+                f"💬 Відгуків: <b>{int(master['reviews_count'] or 0)}</b>"
+            )
+
+        if summary["is_blocked"]:
+            header += (
+                "\n\n"
+                f"🚫 Причина блоку: <b>{summary.get('block_reason') or '—'}</b>"
+            )
+
         kb = InlineKeyboardMarkup(row_width=1)
         if summary["is_blocked"]:
-            kb.add(InlineKeyboardButton("✅ Розблокувати", callback_data=f"admin_unblock_user_{user_id}"))
+            kb.add(InlineKeyboardButton("✅ Розблокувати користувача", callback_data=f"admin_unblock_user_{user_id}"))
         else:
-            kb.add(InlineKeyboardButton("🚫 Заблокувати", callback_data=f"admin_block_user_{user_id}"))
+            kb.add(InlineKeyboardButton("🚫 Заблокувати користувача", callback_data=f"admin_block_user_{user_id}"))
 
         await message.answer(header, reply_markup=kb)
+        await message.answer("Меню:", reply_markup=admin_menu_kb())
 
         rows = await fetch(
             """
