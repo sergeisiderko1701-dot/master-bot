@@ -24,7 +24,7 @@ from aiogram.utils.exceptions import (
 
 import admin
 import admin_chat
-import chat_close_fix
+import order_reopen_notify_fix
 import client
 import common
 import master
@@ -54,8 +54,8 @@ def make_lock_key(token: str) -> int:
 def register_handlers(dp: Dispatcher) -> None:
     client.register(dp)
     master.register(dp)
-    admin_chat.register(dp)  # must be before offers.register(dp) to let admin intercept chat_history_ callbacks
-    chat_close_fix.register(dp)  # must be before offers.register(dp) to fix chat reply keyboard close/history
+    admin_chat.register(dp)  # must be before order_reopen_notify_fix.register(dp)
+    offers.register(dp) to let admin intercept chat_history_ callbacks
     offers.register(dp)
     admin.register(dp)
     misc.register(dp)
