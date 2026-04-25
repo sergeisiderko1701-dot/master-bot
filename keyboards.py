@@ -237,6 +237,22 @@ def master_districts_inline_kb(selected_values):
     return kb
 
 
+
+def client_districts_inline_kb():
+    kb = InlineKeyboardMarkup(row_width=2)
+
+    for district in ODESSA_DISTRICTS:
+        kb.insert(
+            InlineKeyboardButton(
+                district,
+                callback_data=f"client_district_{district}",
+            )
+        )
+
+    kb.add(InlineKeyboardButton("⬅️ Назад", callback_data="client_district_back"))
+    return kb
+
+
 def pagination_inline(prefix: str, page: int, has_prev: bool, has_next: bool):
     kb = InlineKeyboardMarkup(row_width=2)
     row = []
