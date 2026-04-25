@@ -73,6 +73,7 @@ async def send_order_card(bot: Bot, chat_id: int, order_row, title: str = "📄 
     order_id = safe_val(order_row, "id")
     category = safe_val(order_row, "category", "-")
     district = safe_user_text(safe_val(order_row, "district", "-"))
+    client_address = safe_user_text(safe_val(order_row, "client_address", "—"))
     problem = safe_user_text(safe_val(order_row, "problem", "-"))
     status = status_label(safe_val(order_row, "status", "-"))
 
@@ -80,6 +81,7 @@ async def send_order_card(bot: Bot, chat_id: int, order_row, title: str = "📄 
         f"{title}\n\n"
         f"🛠 Категорія: {category_label(category) if category != '-' else '-'}\n"
         f"📍 Район: {district}\n"
+        f"🏠 Адреса: {client_address}\n"
         f"📝 Опис: {problem}\n"
         f"📌 Статус: {status}"
     )
@@ -132,7 +134,8 @@ async def send_admin_order_detail(bot: Bot, chat_id: int, order, offers):
         f"🧾 <b>Деталі заявки #{safe_str(order_id)}</b>\n\n"
         f"👤 <b>Клієнт ID:</b> {safe_str(safe_val(order, 'user_id', '-'))}\n"
         f"🛠 <b>Категорія:</b> {category_label(safe_val(order, 'category', '-')) if safe_val(order, 'category') else '-'}\n"
-        f"📍 <b>Район / адреса:</b> {safe_user_text(safe_val(order, 'district', '—'))}\n"
+        f"📍 <b>Район:</b> {safe_user_text(safe_val(order, 'district', '—'))}\n"
+        f"🏠 <b>Адреса:</b> {safe_user_text(safe_val(order, 'client_address', '—'))}\n"
         f"📝 <b>Опис:</b> {safe_user_text(safe_val(order, 'problem', '—'))}\n"
         f"📌 <b>Статус:</b> {status_label(safe_val(order, 'status', '-'))}\n"
         f"💬 <b>Чат:</b> {chat_info}\n"
