@@ -23,6 +23,7 @@ from aiogram.utils.exceptions import (
 )
 
 import admin
+import admin_chat
 import client
 import common
 import master
@@ -52,6 +53,7 @@ def make_lock_key(token: str) -> int:
 def register_handlers(dp: Dispatcher) -> None:
     client.register(dp)
     master.register(dp)
+    admin_chat.register(dp)  # must be before offers.register(dp) to let admin intercept chat_history_ callbacks
     offers.register(dp)
     admin.register(dp)
     misc.register(dp)
