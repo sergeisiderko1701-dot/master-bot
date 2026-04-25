@@ -3,6 +3,7 @@ import logging
 
 from config import settings
 from notification_queue import process_notification_jobs
+from notification_recovery import recover_stale_notification_jobs
 from keyboards import (
     admin_order_actions_inline,
     client_order_actions_inline,
@@ -22,6 +23,10 @@ MASTER_REMINDER_AFTER_SECONDS = 5 * 60
 ADMIN_NO_OFFER_ALERT_AFTER_SECONDS = 30 * 60
 CLIENT_OFFER_REMINDER_AFTER_SECONDS = 15 * 60
 CLIENT_FINISH_REMINDER_AFTER_SECONDS = 24 * 60 * 60
+
+# Якщо notification job зависла в processing довше цього часу,
+# повертаємо її назад у pending.
+NOTIFICATION_JOB_PROCESSING_STALE_AFTER_SECONDS = 5 * 60
 
 BATCH_LIMIT = 20
 
@@ -383,18 +388,35 @@ async def notify_clients_about_finish_reminder(bot):
 
 async def stale_orders_watcher(bot, shutdown_event: asyncio.Event):
     logger.info(
-        "Stale orders watcher started: notification queue every 2 sec, stale checks every %s sec, master reminder=%s sec, admin alert=%s sec, client offer reminder=%s sec, client finish reminder=%s sec",
+        "Stale orders watcher started: notification queue every 2 sec, stale checks every %s sec, master reminder=%s sec, admin alert=%s sec, client offer reminder=%s sec, client finish reminder=%s sec, notification job recovery=%s sec",
         STALE_ORDERS_CHECK_INTERVAL_SECONDS,
         MASTER_REMINDER_AFTER_SECONDS,
         ADMIN_NO_OFFER_ALERT_AFTER_SECONDS,
         CLIENT_OFFER_REMINDER_AFTER_SECONDS,
         CLIENT_FINISH_REMINDER_AFTER_SECONDS,
+        NOTIFICATION_JOB_PROCESSING_STALE_AFTER_SECONDS,
     )
 
     last_stale_check_at = 0
+    last_recovery_check_at = 0
     notification_loop_interval = 2
 
     while not shutdown_event.is_set():
+        current_ts = now_ts()
+
+        # Recovery не треба ганяти кожні 2 секунди.
+        # Достатньо раз на 60 секунд.
+        if current_ts - last_recovery_check_at >= 60:
+            last_recovery_check_at = current_ts
+            try:
+                recovered = await recover_stale_notification_jobs(
+                    NOTIFICATION_JOB_PROCESSING_STALE_AFTER_SECONDS
+                )
+                if recovered:
+                    logger.warning("Recovered stale notification jobs: %s", recovered)
+            except Exception:
+                logger.exception("Notification job recovery iteration failed")
+
         try:
             processed = await process_notification_jobs(bot, batch_limit=10)
             if processed:
