@@ -13,7 +13,8 @@ from constants import (
     CATEGORIES,
     CHAT_AVAILABLE_STATUSES,
     CLOSED_ORDER_STATUSES,
-    VALID_CATEGORIES,
+    DISTRICT_ALL_ODESSA,
+    ODESSA_DISTRICTS,
 )
 
 
@@ -49,6 +50,7 @@ def skip_verification_kb():
     kb.row(KeyboardButton("➡️ Пропустити перевірку"))
     kb.row(KeyboardButton("⬅️ Назад"), KeyboardButton("🏠 У меню"))
     return kb
+
 
 def main_menu_kb(is_admin_user: bool = False):
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -190,7 +192,7 @@ def edit_profile_inline_kb():
         InlineKeyboardButton("🔧 Категорії", callback_data="edit_category"),
     )
     kb.add(
-        InlineKeyboardButton("📍 Район", callback_data="edit_district"),
+        InlineKeyboardButton("📍 Райони", callback_data="edit_district"),
         InlineKeyboardButton("📞 Телефон", callback_data="edit_phone"),
     )
     kb.add(
@@ -215,6 +217,23 @@ def master_categories_inline_kb(selected_values):
         )
 
     kb.add(InlineKeyboardButton("✅ Готово", callback_data="master_cat_done"))
+    return kb
+
+
+def master_districts_inline_kb(selected_values):
+    selected = set(selected_values or [])
+    kb = InlineKeyboardMarkup(row_width=2)
+
+    for district in ODESSA_DISTRICTS:
+        mark = "✅ " if district in selected else ""
+        kb.insert(
+            InlineKeyboardButton(
+                f"{mark}{district}",
+                callback_data=f"master_dist_toggle_{district}",
+            )
+        )
+
+    kb.add(InlineKeyboardButton("✅ Готово", callback_data="master_dist_done"))
     return kb
 
 
@@ -259,6 +278,7 @@ def support_reply_inline(user_id: int):
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("↩️ Відповісти", callback_data=f"support_reply_{user_id}"))
     return kb
+
 
 def confirm_choose_offer_inline(offer_id: int):
     kb = InlineKeyboardMarkup(row_width=1)
