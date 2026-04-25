@@ -22,6 +22,7 @@ from keyboards import (
     master_categories_inline_kb,
     master_districts_inline_kb,
     master_menu_kb,
+    master_reviews_pagination_inline,
     order_card_master_actions,
     selected_order_master_actions,
     skip_photo_kb,
@@ -33,6 +34,7 @@ from repositories import (
     fetchrow,
     list_active_orders_for_master,
     list_new_orders_for_master,
+    get_master_reviews_page,
     master_any_row,
     touch_master_presence,
     update_master_profile,
@@ -45,7 +47,7 @@ from verification import (
 )
 from states import MasterRegistration, ProfileEdit
 from ui_texts import master_profile_text
-from utils import is_admin, normalize_text
+from utils import is_admin, normalize_text, safe_user_text
 
 
 PROFILE_FIELD_MAP = {
@@ -147,6 +149,70 @@ async def _show_district_selector(message_or_call, selected_values):
 
     if isinstance(message_or_call, types.CallbackQuery):
         await message_or_call.message.answer(text, reply_markup=markup)
+    else:
+        await message_or_call.answer(text, reply_markup=markup)
+
+
+MASTER_REVIEWS_PAGE_SIZE = 5
+
+
+def _format_master_reviews_text(data: dict) -> str:
+    master = data.get("master")
+    reviews = data.get("reviews") or []
+    total = int(data.get("total") or 0)
+    page = int(data.get("page") or 0)
+    page_size = int(data.get("page_size") or MASTER_REVIEWS_PAGE_SIZE)
+
+    rating = float(master["rating"] or 0) if master else 0.0
+    reviews_count = int(master["reviews_count"] or 0) if master else total
+
+    if total <= 0:
+        return (
+            "⭐ <b>Мої відгуки</b>\n\n"
+            "Поки що у вас немає відгуків.\n\n"
+            "Коли клієнт завершить заявку та поставить оцінку, вона з’явиться тут."
+        )
+
+    start = page * page_size + 1
+    end = min(total, start + len(reviews) - 1)
+
+    text = (
+        "⭐ <b>Мої відгуки</b>\n\n"
+        f"⭐ <b>Ваш рейтинг:</b> {rating:.2f}\n"
+        f"📝 <b>Всього відгуків:</b> {reviews_count}\n\n"
+        f"Показано: <b>{start}–{end}</b> з <b>{total}</b>\n\n"
+    )
+
+    for item in reviews:
+        item_rating = item["rating"]
+        review_text = safe_user_text(item["review_text"] or "Без коментаря")
+        order_id = item["order_id"]
+        text += f"⭐ <b>{item_rating}</b> · заявка #{order_id}\n{review_text}\n\n"
+
+    return text.strip()
+
+
+async def _send_master_reviews_page(message_or_call, master_user_id: int, page: int = 0):
+    data = await get_master_reviews_page(
+        master_user_id=master_user_id,
+        page=page,
+        page_size=MASTER_REVIEWS_PAGE_SIZE,
+    )
+
+    total = int(data.get("total") or 0)
+    page = int(data.get("page") or 0)
+    page_size = int(data.get("page_size") or MASTER_REVIEWS_PAGE_SIZE)
+
+    has_prev = page > 0
+    has_next = (page + 1) * page_size < total
+    markup = master_reviews_pagination_inline(page, has_prev, has_next) if total > page_size else None
+    text = _format_master_reviews_text(data)
+
+    if isinstance(message_or_call, types.CallbackQuery):
+        try:
+            await message_or_call.message.edit_text(text, reply_markup=markup)
+        except Exception:
+            await message_or_call.message.answer(text, reply_markup=markup)
     else:
         await message_or_call.answer(text, reply_markup=markup)
 
@@ -606,6 +672,36 @@ def register(dp):
             "Після цього ви почнете отримувати заявки у своїх категоріях.",
             reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
         )
+
+
+    @dp.message_handler(lambda m: m.text == "⭐ Мої відгуки", state="*")
+    async def master_reviews(message: types.Message, state: FSMContext):
+        master = await approved_master_row(message.from_user.id)
+        if not master:
+            await message.answer(
+                "Профіль майстра недоступний.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
+
+        await touch_master_presence(message.from_user.id)
+        await _send_master_reviews_page(message, message.from_user.id, page=0)
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("master_reviews_page_"), state="*")
+    async def master_reviews_page(call: types.CallbackQuery, state: FSMContext):
+        master = await approved_master_row(call.from_user.id)
+        if not master:
+            await call.answer("Профіль майстра недоступний.", show_alert=True)
+            return
+
+        try:
+            page = int(call.data.split("master_reviews_page_", 1)[1])
+        except Exception:
+            page = 0
+
+        await touch_master_presence(call.from_user.id)
+        await _send_master_reviews_page(call, call.from_user.id, page=page)
+        await call.answer()
 
     @dp.message_handler(lambda m: m.text in {"👤 Мій профіль", "👤 Профіль"}, state="*")
     async def profile(message: types.Message, state: FSMContext):
