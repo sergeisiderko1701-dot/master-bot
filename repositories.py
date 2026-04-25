@@ -13,13 +13,7 @@ from utils import now_ts
 # =========================
 
 async def _run_with_retry(method_name: str, query: str, *args):
-    """Run a DB command and recover from asyncpg cached statement errors.
-
-    After schema changes asyncpg can keep a stale prepared statement on an
-    already-open connection. Resetting the whole pool may still hit another
-    stale connection, so first refresh the schema state on the same connection
-    and retry the query there.
-    """
+    """Run a DB command and recover from asyncpg cached statement errors."""
     pool = get_pool()
 
     async with pool.acquire() as conn:
@@ -29,7 +23,6 @@ async def _run_with_retry(method_name: str, query: str, *args):
             return await method(query, *args)
 
         except asyncpg.exceptions.InvalidCachedStatementError:
-            # Clear asyncpg/PostgreSQL cached plans for this connection and retry once.
             try:
                 await conn.reload_schema_state()
             except Exception:
@@ -44,7 +37,6 @@ async def _run_with_retry(method_name: str, query: str, *args):
             return await method(query, *args)
 
         except asyncpg.InvalidCachedStatementError:
-            # Compatibility fallback for asyncpg versions exposing the exception at top level.
             try:
                 await conn.reload_schema_state()
             except Exception:
@@ -57,6 +49,7 @@ async def _run_with_retry(method_name: str, query: str, *args):
 
             method = getattr(conn, method_name)
             return await method(query, *args)
+
 
 async def fetch(query: str, *args):
     return await _run_with_retry("fetch", query, *args)
@@ -113,28 +106,18 @@ async def add_order_event(
 
 
 # =========================
-# ADMIN FUNNEL
+# ADMIN FUNNEL / STATS
 # =========================
 
 async def admin_funnel_stats(period_seconds: Optional[int] = None):
-    """
-    Воронка по заявках, створених за період.
-    Якщо period_seconds=None -> весь час.
-    """
     threshold = now_ts() - period_seconds if period_seconds else None
-
-    where_clause = ""
-    args = []
-
-    if threshold is not None:
-        where_clause = "WHERE created_at >= $1"
-        args = [threshold]
+    args = [threshold] if threshold is not None else []
 
     total_row = await fetchrow(
         f"""
         SELECT COUNT(*) AS c
         FROM orders
-        {where_clause}
+        {"WHERE created_at >= $1" if threshold is not None else ""}
         """,
         *args,
     )
@@ -258,6 +241,28 @@ async def admin_funnel_stats(period_seconds: Optional[int] = None):
     }
 
 
+async def admin_stats():
+    keys = {
+        "masters_total": "SELECT COUNT(*) AS c FROM masters",
+        "masters_approved": "SELECT COUNT(*) AS c FROM masters WHERE status='approved'",
+        "masters_pending": "SELECT COUNT(*) AS c FROM masters WHERE status='pending'",
+        "masters_blocked": "SELECT COUNT(*) AS c FROM masters WHERE status='blocked'",
+        "orders_total": "SELECT COUNT(*) AS c FROM orders",
+        "orders_new": "SELECT COUNT(*) AS c FROM orders WHERE status='new'",
+        "orders_offered": "SELECT COUNT(*) AS c FROM orders WHERE status='offered'",
+        "orders_matched": "SELECT COUNT(*) AS c FROM orders WHERE status='matched'",
+        "orders_progress": "SELECT COUNT(*) AS c FROM orders WHERE status='in_progress'",
+        "orders_done": "SELECT COUNT(*) AS c FROM orders WHERE status='done'",
+        "orders_cancelled": "SELECT COUNT(*) AS c FROM orders WHERE status='cancelled'",
+        "orders_expired": "SELECT COUNT(*) AS c FROM orders WHERE status='expired'",
+    }
+    data = {}
+    for key, query in keys.items():
+        row = await fetchrow(query)
+        data[key] = int(row["c"] or 0)
+    return data
+
+
 # =========================
 # SPAM LOGS
 # =========================
@@ -304,10 +309,7 @@ async def add_spam_log(
 # =========================
 
 async def master_any_row(user_id: int):
-    return await fetchrow(
-        "SELECT * FROM masters WHERE user_id=$1",
-        user_id,
-    )
+    return await fetchrow("SELECT * FROM masters WHERE user_id=$1", user_id)
 
 
 async def approved_master_row(user_id: int):
@@ -321,14 +323,15 @@ async def create_or_update_master(data: dict):
     ts = now_ts()
     category_value = normalize_categories_value(data.get("category"))
     pool = get_pool()
+
     async with pool.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO masters(
                 user_id, name, category, district, phone, description, experience, photo,
-                rating, reviews_count, status, availability, last_seen
+                rating, reviews_count, status, availability, last_seen, created_at, updated_at
             )
-            VALUES($1, $2, $3, $4, $5, $6, $7, $8, 0, 0, 'pending', 'offline', $9)
+            VALUES($1, $2, $3, $4, $5, $6, $7, $8, 0, 0, 'pending', 'offline', $9, $9, $9)
             ON CONFLICT(user_id) DO UPDATE SET
                 name=EXCLUDED.name,
                 category=EXCLUDED.category,
@@ -339,7 +342,8 @@ async def create_or_update_master(data: dict):
                 photo=EXCLUDED.photo,
                 status='pending',
                 availability='offline',
-                last_seen=EXCLUDED.last_seen
+                last_seen=EXCLUDED.last_seen,
+                updated_at=EXCLUDED.updated_at
             """,
             data["user_id"],
             data.get("name"),
@@ -361,8 +365,8 @@ async def update_master_profile(user_id: int, field_name: str, value):
     if field_name == "category":
         value = normalize_categories_value(value)
 
-    query = f"UPDATE masters SET {field_name}=$1 WHERE user_id=$2"
-    await execute(query, value, user_id)
+    query = f"UPDATE masters SET {field_name}=$1, updated_at=$2 WHERE user_id=$3"
+    await execute(query, value, now_ts(), user_id)
 
 
 async def touch_master_presence(user_id: int):
@@ -370,7 +374,8 @@ async def touch_master_presence(user_id: int):
         """
         UPDATE masters
         SET availability='online',
-            last_seen=$1
+            last_seen=$1,
+            updated_at=$1
         WHERE user_id=$2
         """,
         now_ts(),
@@ -460,13 +465,8 @@ async def get_master_name(master_user_id: Optional[int]) -> str:
 
 
 async def set_master_status_by_id(master_id: int, status: str, availability: Optional[str] = None):
-    """
-    Admin moderation helper.
+    ts = now_ts()
 
-    If admin approves a master with pending proof-of-work verification,
-    mark verification_status='verified'. If admin blocks/rejects pending proof,
-    mark it as 'rejected'. Masters who skipped verification remain unverified.
-    """
     if availability:
         await execute(
             """
@@ -483,7 +483,7 @@ async def set_master_status_by_id(master_id: int, status: str, availability: Opt
             """,
             status,
             availability,
-            now_ts(),
+            ts,
             master_id,
         )
     else:
@@ -500,9 +500,11 @@ async def set_master_status_by_id(master_id: int, status: str, availability: Opt
             WHERE id=$3
             """,
             status,
-            now_ts(),
+            ts,
             master_id,
         )
+
+
 async def delete_master_by_id(master_id: int):
     await execute("DELETE FROM masters WHERE id=$1", master_id)
 
@@ -820,26 +822,89 @@ async def reject_suspicious_order(order_id: int, admin_user_id: int):
 
 
 async def set_order_status(order_id: int, status: str, selected_master_id=None):
-    current = await fetchrow(
-        "SELECT status, selected_master_id FROM orders WHERE id=$1",
-        order_id,
-    )
-    if not current:
-        return
+    """
+    Атомарна зміна статусу заявки для адмінських дій.
 
-    await execute(
-        """
-        UPDATE orders
-        SET status=$1,
-            selected_master_id=$2,
-            updated_at=$3
-        WHERE id=$4
-        """,
-        status,
-        selected_master_id,
-        now_ts(),
-        order_id,
-    )
+    Що стало краще:
+    - order блокується через FOR UPDATE;
+    - пов'язані offers/chats оновлюються в одній транзакції;
+    - або всі зміни проходять, або все відкочується.
+
+    Важливо:
+    - offers.status має тільки active/chosen/rejected, тому НЕ використовуємо 'closed';
+    - при expired/cancelled/new активні офери переводимо в rejected;
+    - при done закриваємо чат, але не чіпаємо chosen offer;
+    - при in_progress/matched зберігаємо selected_master_id.
+    """
+    pool = get_pool()
+    ts = now_ts()
+
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            current = await conn.fetchrow(
+                """
+                SELECT *
+                FROM orders
+                WHERE id=$1
+                FOR UPDATE
+                """,
+                order_id,
+            )
+            if not current:
+                return None
+
+            await conn.execute(
+                """
+                UPDATE orders
+                SET status=$1,
+                    selected_master_id=$2,
+                    updated_at=$3
+                WHERE id=$4
+                """,
+                status,
+                selected_master_id,
+                ts,
+                order_id,
+            )
+
+            if status in {"expired", "cancelled"}:
+                await conn.execute(
+                    """
+                    UPDATE offers
+                    SET status='rejected'
+                    WHERE order_id=$1
+                      AND status IN ('active', 'chosen')
+                    """,
+                    order_id,
+                )
+                await conn.execute(
+                    "UPDATE chats SET status='closed' WHERE order_id=$1",
+                    order_id,
+                )
+
+            elif status == "done":
+                await conn.execute(
+                    "UPDATE chats SET status='closed' WHERE order_id=$1",
+                    order_id,
+                )
+
+            elif status == "new":
+                await conn.execute(
+                    """
+                    UPDATE offers
+                    SET status='rejected'
+                    WHERE order_id=$1
+                      AND status IN ('active', 'chosen')
+                    """,
+                    order_id,
+                )
+                await conn.execute(
+                    "UPDATE chats SET status='closed' WHERE order_id=$1",
+                    order_id,
+                )
+
+            updated = await conn.fetchrow("SELECT * FROM orders WHERE id=$1", order_id)
 
     await add_order_event(
         order_id=order_id,
@@ -850,6 +915,8 @@ async def set_order_status(order_id: int, status: str, selected_master_id=None):
         actor_role="system",
         payload=f"selected_master_id={selected_master_id}",
     )
+
+    return updated
 
 
 async def cancel_order(order_id: int, client_user_id: Optional[int] = None):
@@ -911,6 +978,7 @@ async def cancel_order(order_id: int, client_user_id: Optional[int] = None):
 
     return order
 
+
 async def refuse_order(order_id: int):
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -925,7 +993,7 @@ async def refuse_order(order_id: int):
                 order_id,
             )
             if not order:
-                return
+                return None
 
             selected_master_id = order["selected_master_id"]
 
@@ -992,6 +1060,8 @@ async def refuse_order(order_id: int):
         actor_role="master",
         payload=f"active_offers_after={int(active_offers_count or 0)}",
     )
+
+    return await get_order_row(order_id)
 
 
 async def reopen_order_by_client(order_id: int, client_user_id: int):
@@ -1144,39 +1214,12 @@ async def finish_order(order_id: int, master_user_id: Optional[int] = None):
 
     return order
 
-async def admin_stats():
-    keys = {
-        "masters_total": "SELECT COUNT(*) AS c FROM masters",
-        "masters_approved": "SELECT COUNT(*) AS c FROM masters WHERE status='approved'",
-        "masters_pending": "SELECT COUNT(*) AS c FROM masters WHERE status='pending'",
-        "masters_blocked": "SELECT COUNT(*) AS c FROM masters WHERE status='blocked'",
-        "orders_total": "SELECT COUNT(*) AS c FROM orders",
-        "orders_new": "SELECT COUNT(*) AS c FROM orders WHERE status='new'",
-        "orders_offered": "SELECT COUNT(*) AS c FROM orders WHERE status='offered'",
-        "orders_matched": "SELECT COUNT(*) AS c FROM orders WHERE status='matched'",
-        "orders_progress": "SELECT COUNT(*) AS c FROM orders WHERE status='in_progress'",
-        "orders_done": "SELECT COUNT(*) AS c FROM orders WHERE status='done'",
-        "orders_cancelled": "SELECT COUNT(*) AS c FROM orders WHERE status='cancelled'",
-        "orders_expired": "SELECT COUNT(*) AS c FROM orders WHERE status='expired'",
-    }
-    data = {}
-    for key, query in keys.items():
-        row = await fetchrow(query)
-        data[key] = int(row["c"] or 0)
-    return data
-
 
 # =========================
 # OFFERS
 # =========================
 
-async def create_offer(
-    order_id: int,
-    master_user_id: int,
-    price: str,
-    eta: str,
-    comment: str,
-):
+async def create_offer(order_id: int, master_user_id: int, price: str, eta: str, comment: str):
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -1351,10 +1394,7 @@ async def choose_offer(offer_id: int, client_user_id: int):
                 offer["order_id"],
             )
 
-            chat = await conn.fetchrow(
-                "SELECT * FROM chats WHERE order_id=$1",
-                offer["order_id"],
-            )
+            chat = await conn.fetchrow("SELECT * FROM chats WHERE order_id=$1", offer["order_id"])
 
             if chat:
                 await conn.execute(
@@ -1387,10 +1427,7 @@ async def choose_offer(offer_id: int, client_user_id: int):
                     now_ts(),
                 )
 
-            selected_offer = await conn.fetchrow(
-                "SELECT * FROM offers WHERE id=$1",
-                offer_id,
-            )
+            selected_offer = await conn.fetchrow("SELECT * FROM offers WHERE id=$1", offer_id)
 
     await add_order_event(
         order_id=offer["order_id"],
@@ -1442,10 +1479,7 @@ async def create_chat_if_not_exists(order_id: int, client_user_id: int, master_u
                         master_user_id,
                         chat["id"],
                     )
-                    chat = await conn.fetchrow(
-                        "SELECT * FROM chats WHERE id=$1",
-                        chat["id"],
-                    )
+                    chat = await conn.fetchrow("SELECT * FROM chats WHERE id=$1", chat["id"])
                 return chat
 
             return await conn.fetchrow(
@@ -1468,10 +1502,7 @@ async def create_chat_if_not_exists(order_id: int, client_user_id: int, master_u
 
 
 async def close_chat(order_id: int):
-    await execute(
-        "UPDATE chats SET status='closed' WHERE order_id=$1",
-        order_id,
-    )
+    await execute("UPDATE chats SET status='closed' WHERE order_id=$1", order_id)
 
 
 async def create_chat_message(
@@ -1664,12 +1695,14 @@ async def rate_order(order_id: int, client_user_id: int, rating: int, review_tex
                 """
                 UPDATE masters
                 SET rating=$1,
-                    reviews_count=$2
+                    reviews_count=$2,
+                    updated_at=$4
                 WHERE user_id=$3
                 """,
                 float(stats["avg_rating"] or 0),
                 int(stats["reviews_count"] or 0),
                 master_user_id,
+                now_ts(),
             )
 
             updated_order = await conn.fetchrow("SELECT * FROM orders WHERE id=$1", order_id)
@@ -1699,12 +1732,6 @@ async def create_notification_job(
     payload: Optional[str] = None,
     next_attempt_at: int = 0,
 ):
-    """
-    Stores a notification job for background sending.
-
-    For new_order jobs we use a partial unique index in DB to avoid duplicate
-    notifications to the same master for the same order.
-    """
     ts = now_ts()
     row = await fetchrow(
         """
@@ -1735,10 +1762,6 @@ async def create_notification_job(
 
 
 async def claim_notification_jobs(limit: int = 10):
-    """
-    Atomically claims pending notification jobs.
-    Uses SKIP LOCKED so multiple workers can run safely.
-    """
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -1828,15 +1851,12 @@ async def mark_notification_job_failed(job_id: int, error_text: str):
         job_id,
     )
 
+
 # =========================
 # PUBLIC MASTER LIST / REVIEWS
 # =========================
 
 async def list_public_masters_for_category(category: str, limit: int = 10):
-    """
-    Public list of approved masters for client browsing.
-    Contacts are intentionally not returned here.
-    """
     return await fetch(
         """
         SELECT
@@ -1869,9 +1889,6 @@ async def list_public_masters_for_category(category: str, limit: int = 10):
 
 
 async def get_public_master_profile(master_user_id: int):
-    """
-    Public master profile without phone/contact data.
-    """
     return await fetchrow(
         """
         SELECT
@@ -1914,7 +1931,7 @@ async def get_master_recent_reviews(master_user_id: int, limit: int = 5):
         limit,
     )
 
-# Backward-compatible aliases used by offer profile handlers.
+
 async def get_master_public_profile(master_user_id: int):
     return await get_public_master_profile(master_user_id)
 
