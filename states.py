@@ -3,6 +3,7 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 
 class ClientCreateOrder(StatesGroup):
     district = State()
+    address = State()
     problem = State()
     phone = State()
     media = State()
