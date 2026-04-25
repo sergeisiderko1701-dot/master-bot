@@ -22,6 +22,7 @@ from keyboards import (
     skip_review_kb,
 )
 from repositories import (
+    is_user_blocked,
     add_complaint,
     approved_master_row,
     choose_offer,
@@ -80,6 +81,17 @@ SKIP_WORDS = {
 
 
 def register(dp):
+    async def _is_chat_blocked(user_id: int) -> bool:
+        """
+        Centralized chat block check.
+        If user is in blocked_users, they cannot open or send chat messages.
+        """
+        try:
+            return await is_user_blocked(user_id)
+        except Exception:
+            logger.exception("Failed to check chat block for user_id=%s", user_id)
+            return False
+
     async def get_offer_full_row(offer_id: int):
         return await fetchrow(
             """
@@ -218,6 +230,24 @@ def register(dp):
         chat_id: int,
         is_client: bool,
     ):
+        actor_user_id = message_or_call.from_user.id
+
+        if await _is_chat_blocked(actor_user_id):
+            text = "🚫 Ви заблоковані і не можете користуватися чатом."
+            if isinstance(message_or_call, types.CallbackQuery):
+                await message_or_call.answer(text, show_alert=True)
+            else:
+                await message_or_call.answer(text, reply_markup=main_menu_kb(is_admin_user=is_admin(actor_user_id)))
+            return
+
+        if await _is_chat_blocked(target_user_id):
+            text = "🚫 Діалог недоступний: інший користувач заблокований."
+            if isinstance(message_or_call, types.CallbackQuery):
+                await message_or_call.answer(text, show_alert=True)
+            else:
+                await message_or_call.answer(text, reply_markup=main_menu_kb(is_admin_user=is_admin(actor_user_id)))
+            return
+
         await state.finish()
         await state.update_data(
             chat_role=role,
@@ -1164,6 +1194,10 @@ def register(dp):
         if not allowed:
             return
 
+        if await _is_chat_blocked(call.from_user.id):
+            await call.answer("🚫 Ви заблоковані і не можете відкривати історію чату.", show_alert=True)
+            return
+
         order_id = int(call.data.split("_")[-1])
 
         chat = await get_chat_for_order(order_id)
@@ -1189,6 +1223,14 @@ def register(dp):
             mute_seconds=300,
         )
         if not allowed:
+            return
+
+        if await _is_chat_blocked(message.from_user.id):
+            await state.finish()
+            await message.answer(
+                "🚫 Ви заблоковані і не можете відкривати історію чату.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
             return
 
         data = await state.get_data()
@@ -1259,6 +1301,22 @@ def register(dp):
         role = data["chat_role"]
         order_id = data["order_id"]
         chat_id = data["chat_id"]
+
+        if await _is_chat_blocked(message.from_user.id):
+            await state.finish()
+            await message.answer(
+                "🚫 Ви заблоковані і не можете надсилати повідомлення в чат.",
+                reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
+            )
+            return
+
+        if await _is_chat_blocked(target_id):
+            await state.finish()
+            await message.answer(
+                "🚫 Повідомлення не надіслано: інший користувач заблокований.",
+                reply_markup=await _after_dialog_markup(role, order_id),
+            )
+            return
 
         chat = await get_chat_for_order(order_id)
         if not chat or chat["status"] != "active":
