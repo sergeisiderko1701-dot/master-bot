@@ -5,16 +5,22 @@ from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 from config import settings
 from validators import normalize_phone, is_valid_ua_phone
 from constants import (
+    DISTRICT_ALL_ODESSA,
     VALID_CATEGORIES,
+    VALID_ODESSA_DISTRICTS,
     category_labels,
+    district_labels,
     normalize_categories_value,
+    normalize_districts_value,
     parse_categories,
+    parse_districts,
 )
 from keyboards import (
     back_menu_kb,
     edit_profile_inline_kb,
     main_menu_kb,
     master_categories_inline_kb,
+    master_districts_inline_kb,
     master_menu_kb,
     order_card_master_actions,
     selected_order_master_actions,
@@ -38,10 +44,7 @@ from verification import (
     normalize_verification_text,
 )
 from states import MasterRegistration, ProfileEdit
-from ui_texts import (
-    ask_district_text,
-    master_profile_text,
-)
+from ui_texts import master_profile_text
 from utils import is_admin, normalize_text
 
 
@@ -87,12 +90,6 @@ def _validate_profile_field(field: str, message: types.Message):
             return False, None, "Введіть коректне ім'я."
         return True, value, None
 
-    if field == "district":
-        value = normalize_text(raw_text, 255)
-        if not value:
-            return False, None, "Будь ласка, вкажіть район роботи."
-        return True, value, None
-
     if field == "phone":
         phone = normalize_phone(raw_text)
         if not is_valid_ua_phone(phone):
@@ -121,13 +118,32 @@ def _get_selected_categories(data: dict) -> list[str]:
     return parse_categories(data.get("selected_categories"))
 
 
-async def _show_category_selector(message_or_call, selected_values, *, edit_mode: bool = False):
+def _get_selected_districts(data: dict) -> list[str]:
+    return parse_districts(data.get("selected_districts"))
+
+
+async def _show_category_selector(message_or_call, selected_values):
     text = (
         "🔧 <b>Оберіть одну або кілька спеціальностей</b>\n\n"
         "Можна вибрати кілька варіантів.\n"
         "Після вибору натисніть <b>✅ Готово</b>."
     )
     markup = master_categories_inline_kb(selected_values)
+
+    if isinstance(message_or_call, types.CallbackQuery):
+        await message_or_call.message.answer(text, reply_markup=markup)
+    else:
+        await message_or_call.answer(text, reply_markup=markup)
+
+
+async def _show_district_selector(message_or_call, selected_values):
+    text = (
+        "📍 <b>Оберіть райони, де ви працюєте</b>\n\n"
+        "Можна вибрати один або кілька районів.\n"
+        "Якщо працюєте по всьому місту — оберіть <b>Вся Одеса</b>.\n\n"
+        "Після вибору натисніть <b>✅ Готово</b>."
+    )
+    markup = master_districts_inline_kb(selected_values)
 
     if isinstance(message_or_call, types.CallbackQuery):
         await message_or_call.message.answer(text, reply_markup=markup)
@@ -224,7 +240,7 @@ def register(dp):
             )
             return
 
-        await state.update_data(name=name, selected_categories=[])
+        await state.update_data(name=name, selected_categories=[], selected_districts=[])
         await MasterRegistration.category.set()
         await _show_category_selector(message, [])
 
@@ -260,18 +276,74 @@ def register(dp):
             await call.answer("Оберіть хоча б одну спеціальність", show_alert=True)
             return
 
-        await state.update_data(category=normalize_categories_value(selected))
+        await state.update_data(category=normalize_categories_value(selected), selected_districts=[])
         await MasterRegistration.district.set()
         await call.message.answer(
             f"✅ <b>Обрані спеціальності:</b> {category_labels(selected)}",
             reply_markup=back_menu_kb(),
         )
-        await call.message.answer(ask_district_text(), reply_markup=back_menu_kb())
+        await _show_district_selector(call, [])
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data.startswith("master_dist_toggle_"), state=[MasterRegistration.district, ProfileEdit.category])
+    async def district_toggle(call: types.CallbackQuery, state: FSMContext):
+        district_value = call.data.split("master_dist_toggle_", 1)[1].strip()
+
+        if district_value not in VALID_ODESSA_DISTRICTS:
+            await call.answer("Некоректний район", show_alert=True)
+            return
+
+        data = await state.get_data()
+        selected = _get_selected_districts(data)
+
+        if district_value == DISTRICT_ALL_ODESSA:
+            selected = [] if DISTRICT_ALL_ODESSA in selected else [DISTRICT_ALL_ODESSA]
+        else:
+            if DISTRICT_ALL_ODESSA in selected:
+                selected.remove(DISTRICT_ALL_ODESSA)
+
+            if district_value in selected:
+                selected.remove(district_value)
+            else:
+                selected.append(district_value)
+
+        await state.update_data(selected_districts=selected)
+        await call.message.edit_reply_markup(
+            reply_markup=master_districts_inline_kb(selected)
+        )
+        await call.answer()
+
+    @dp.callback_query_handler(lambda c: c.data == "master_dist_done", state=MasterRegistration.district)
+    async def reg_district_done(call: types.CallbackQuery, state: FSMContext):
+        data = await state.get_data()
+        selected = _get_selected_districts(data)
+
+        if not selected:
+            await call.answer("Оберіть хоча б один район", show_alert=True)
+            return
+
+        await state.update_data(district=normalize_districts_value(selected))
+        await MasterRegistration.description.set()
+        await call.message.answer(
+            f"✅ <b>Обрані райони:</b> {district_labels(selected)}",
+            reply_markup=back_menu_kb(),
+        )
+        await call.message.answer(
+            "🧾 <b>Коротко про себе</b>\n\n"
+            "Напишіть кілька речень про ваш досвід і спеціалізацію.",
+            reply_markup=back_menu_kb(),
+        )
         await call.answer()
 
     @dp.callback_query_handler(lambda c: c.data == "master_cat_done", state=ProfileEdit.category)
     async def edit_category_done(call: types.CallbackQuery, state: FSMContext):
         data = await state.get_data()
+        edit_field = data.get("edit_field")
+
+        if edit_field != "category":
+            await call.answer()
+            return
+
         selected = _get_selected_categories(data)
 
         if not selected:
@@ -291,23 +363,35 @@ def register(dp):
         )
         await call.answer("Збережено")
 
-    @dp.message_handler(state=MasterRegistration.district, content_types=types.ContentTypes.TEXT)
-    async def reg_district(message: types.Message, state: FSMContext):
-        district = normalize_text(message.text, 255)
-        if not district:
-            await message.answer(
-                "Будь ласка, вкажіть район роботи.",
-                reply_markup=back_menu_kb(),
-            )
+    @dp.callback_query_handler(lambda c: c.data == "master_dist_done", state=ProfileEdit.category)
+    async def edit_district_done(call: types.CallbackQuery, state: FSMContext):
+        data = await state.get_data()
+        edit_field = data.get("edit_field")
+
+        if edit_field != "district":
+            await call.answer()
             return
 
-        await state.update_data(district=district)
-        await MasterRegistration.description.set()
-        await message.answer(
-            "🧾 <b>Коротко про себе</b>\n\n"
-            "Напишіть кілька речень про ваш досвід і спеціалізацію.",
-            reply_markup=back_menu_kb(),
+        selected = _get_selected_districts(data)
+
+        if not selected:
+            await call.answer("Оберіть хоча б один район", show_alert=True)
+            return
+
+        normalized = normalize_districts_value(selected)
+
+        await update_master_profile(
+            call.from_user.id,
+            PROFILE_FIELD_MAP["district"],
+            normalized,
         )
+
+        await state.finish()
+        await call.message.answer(
+            f"✅ <b>Райони роботи оновлено:</b> {district_labels(normalized)}",
+            reply_markup=master_menu_kb(),
+        )
+        await call.answer("Збережено")
 
     @dp.message_handler(state=MasterRegistration.description, content_types=types.ContentTypes.TEXT)
     async def reg_description(message: types.Message, state: FSMContext):
@@ -462,7 +546,6 @@ def register(dp):
             reply_markup=skip_photo_kb(),
         )
 
-
     @dp.message_handler(content_types=types.ContentTypes.ANY, state=MasterRegistration.photo)
     async def reg_photo(message: types.Message, state: FSMContext):
         text = (message.text or "").strip().lower()
@@ -479,6 +562,7 @@ def register(dp):
         data["user_id"] = message.from_user.id
         data["photo"] = photo
         data["category"] = normalize_categories_value(data.get("category") or data.get("selected_categories"))
+        data["district"] = normalize_districts_value(data.get("district") or data.get("selected_districts"))
 
         await create_or_update_master(data)
 
@@ -566,7 +650,15 @@ def register(dp):
             selected = parse_categories(master["category"])
             await state.update_data(edit_field=field, selected_categories=selected)
             await ProfileEdit.category.set()
-            await _show_category_selector(call, selected, edit_mode=True)
+            await _show_category_selector(call, selected)
+            await call.answer()
+            return
+
+        if field == "district":
+            selected = parse_districts(master["district"])
+            await state.update_data(edit_field=field, selected_districts=selected)
+            await ProfileEdit.category.set()
+            await _show_district_selector(call, selected)
             await call.answer()
             return
 
@@ -678,7 +770,8 @@ def register(dp):
         if not rows:
             await message.answer(
                 f"📭 <b>Нових заявок поки немає</b>\n\n"
-                f"Категорії: {category_labels(master['category'])}\n\n"
+                f"Категорії: {category_labels(master['category'])}\n"
+                f"Райони: {district_labels(master['district'])}\n\n"
                 "Ми покажемо вам нові заявки, щойно вони з’являться.\n\n"
                 "ℹ️ Щоб отримувати заявки:\n"
                 "• профіль має бути підтверджений\n"
@@ -689,7 +782,9 @@ def register(dp):
             return
 
         await message.answer(
-            f"📦 <b>Нові заявки</b>\n\nКатегорії: {category_labels(master['category'])}",
+            f"📦 <b>Нові заявки</b>\n\n"
+            f"Категорії: {category_labels(master['category'])}\n"
+            f"Райони: {district_labels(master['district'])}",
             reply_markup=master_menu_kb(),
         )
 
