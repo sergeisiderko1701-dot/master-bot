@@ -22,6 +22,8 @@ DEFAULT_BATCH_LIMIT = 10
 MAX_ATTEMPTS = 3
 SEND_DELAY_SECONDS = 0.12
 
+SUPPORTED_ORDER_NOTIFICATION_TYPES = {"new_order", "reopened_order"}
+
 
 def _safe_payload(raw_payload):
     if not raw_payload:
@@ -32,21 +34,33 @@ def _safe_payload(raw_payload):
         return {}
 
 
-async def _send_new_order_job(bot, job):
+async def _send_order_job(bot, job):
     payload = _safe_payload(job.get("payload") if hasattr(job, "get") else job["payload"])
     order_id = int(job["order_id"] or payload.get("order_id") or 0)
     if order_id <= 0:
-        raise ValueError("new_order job without valid order_id")
+        raise ValueError("order notification job without valid order_id")
 
     order = await get_order_row(order_id)
     if not order:
         raise ValueError(f"order {order_id} not found")
 
     user_id = int(job["user_id"])
-    title = payload.get("title") or "🔔 <b>Нова заявка</b>"
-    text_after_card = payload.get("text_after_card") or (
-        "Натисніть <b>📨 Відгукнутись</b>, якщо хочете взяти цю заявку в роботу."
-    )
+    notification_type = job["notification_type"]
+
+    if notification_type == "reopened_order":
+        default_title = "🔄 <b>Заявка знову відкрита</b>"
+        default_text_after_card = (
+            "Майстер відмовився, тому заявка знову доступна.\n"
+            "Натисніть <b>📨 Відгукнутись</b>, якщо можете допомогти клієнту."
+        )
+    else:
+        default_title = "🔔 <b>Нова заявка</b>"
+        default_text_after_card = (
+            "Натисніть <b>📨 Відгукнутись</b>, якщо хочете взяти цю заявку в роботу."
+        )
+
+    title = payload.get("title") or default_title
+    text_after_card = payload.get("text_after_card") or default_text_after_card
 
     await send_order_card(
         bot,
@@ -77,8 +91,8 @@ async def process_notification_jobs(bot, batch_limit: int = DEFAULT_BATCH_LIMIT)
         notification_type = job["notification_type"]
 
         try:
-            if notification_type == "new_order":
-                await _send_new_order_job(bot, job)
+            if notification_type in SUPPORTED_ORDER_NOTIFICATION_TYPES:
+                await _send_order_job(bot, job)
             else:
                 raise ValueError(f"unsupported notification_type={notification_type}")
 
