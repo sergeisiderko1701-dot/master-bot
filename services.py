@@ -229,7 +229,16 @@ async def send_chat_history(bot: Bot, chat_id: int, order_id: int, messages):
     ]
 
     for msg in reversed(messages):
-        sender = "👤 <b>Клієнт</b>" if safe_val(msg, "sender_role") == "client" else "👷 <b>Майстер</b>"
+        sender_role = safe_val(msg, "sender_role")
+        if sender_role == "client":
+            sender = "👤 <b>Клієнт</b>"
+        elif sender_role == "master":
+            sender = "👷 <b>Майстер</b>"
+        elif sender_role == "admin":
+            sender = "👨‍💼 <b>Адмін / підтримка</b>"
+        else:
+            sender = "💬 <b>Повідомлення</b>"
+
         message_type = safe_val(msg, "message_type", "text")
         msg_text = safe_user_text(safe_val(msg, "text", ""))
 
