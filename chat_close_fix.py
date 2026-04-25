@@ -2,9 +2,14 @@ import logging
 
 from aiogram import types
 from aiogram.dispatcher import FSMContext
-from aiogram.types import ReplyKeyboardRemove
 
-from keyboards import client_order_actions_inline, main_menu_kb, selected_order_master_actions
+from keyboards import (
+    client_actions_kb,
+    client_order_actions_inline,
+    main_menu_kb,
+    master_menu_kb,
+    selected_order_master_actions,
+)
 from repositories import get_chat_history, get_order_row, touch_master_presence
 from security import allow_message_action
 from services import send_chat_history
@@ -19,13 +24,13 @@ CHAT_HISTORY_BUTTONS = {"📜 Історія", "Історія"}
 CHAT_MENU_BUTTONS = {"🏠 У меню", "⬅️ Назад", "Назад", "🔙 Назад"}
 
 
-async def _client_after_chat_markup(order_id: int):
+async def _client_after_chat_inline(order_id: int):
     order = await get_order_row(order_id)
     status = order["status"] if order else "matched"
     return client_order_actions_inline(order_id, status)
 
 
-async def _master_after_chat_markup(order_id: int):
+async def _master_after_chat_inline(order_id: int):
     order = await get_order_row(order_id)
     if order and order["status"] in {"matched", "in_progress"}:
         return selected_order_master_actions(order_id)
@@ -34,34 +39,48 @@ async def _master_after_chat_markup(order_id: int):
 
 async def _send_after_chat_screen(message: types.Message, *, role: str | None, order_id: int | None):
     """
-    Спочатку прибирає ReplyKeyboard, щоб кнопки "📜 Історія / ❌ Закрити"
-    не залишались після виходу з ChatFlow.message.
+    Закриває режим написання і повертає нормальну нижню клавіатуру.
+
+    Важливо:
+    - не використовуємо ReplyKeyboardRemove(), бо після цього користувач
+      лишається без кнопок знизу;
+    - клієнту повертаємо client_actions_kb();
+    - майстру повертаємо master_menu_kb();
+    - inline-кнопки заявки показуємо окремим повідомленням.
     """
-    await message.answer(
-        "✋ <b>Режим написання закрито</b>",
-        reply_markup=ReplyKeyboardRemove(),
-    )
 
     if role == "client" and order_id:
         await message.answer(
+            "✋ <b>Режим написання закрито</b>\n\n"
+            "Ви можете повернутись до меню або продовжити роботу із заявкою.",
+            reply_markup=client_actions_kb(),
+        )
+
+        await message.answer(
             f"📄 <b>Ви повернулись до заявки #{order_id}</b>",
-            reply_markup=await _client_after_chat_markup(order_id),
+            reply_markup=await _client_after_chat_inline(order_id),
         )
         return
 
     if role == "master" and order_id:
-        markup = await _master_after_chat_markup(order_id)
-        if markup:
-            try:
-                await touch_master_presence(message.from_user.id)
-            except Exception:
-                logger.exception("Failed to update master presence after chat close")
+        try:
+            await touch_master_presence(message.from_user.id)
+        except Exception:
+            logger.exception("Failed to update master presence after chat close")
 
+        await message.answer(
+            "✋ <b>Режим написання закрито</b>\n\n"
+            "Ви можете повернутись до меню майстра або продовжити роботу із заявкою.",
+            reply_markup=master_menu_kb(),
+        )
+
+        inline_markup = await _master_after_chat_inline(order_id)
+        if inline_markup:
             await message.answer(
                 f"📄 <b>Ви повернулись до заявки #{order_id}</b>",
-                reply_markup=markup,
+                reply_markup=inline_markup,
             )
-            return
+        return
 
     await message.answer(
         "🏠 <b>Повернення в меню</b>",
@@ -89,10 +108,6 @@ def register(dp):
             await state.finish()
             await message.answer(
                 "Не вдалося визначити заявку. Чат закрито.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            await message.answer(
-                "🏠 <b>Повернення в меню</b>",
                 reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
             )
             return
@@ -126,12 +141,27 @@ def register(dp):
         await state.finish()
 
         if message.text == "🏠 У меню":
+            if role == "client":
+                await message.answer(
+                    "🏠 <b>Повернення в меню клієнта</b>",
+                    reply_markup=client_actions_kb(),
+                )
+                return
+
+            if role == "master":
+                try:
+                    await touch_master_presence(message.from_user.id)
+                except Exception:
+                    logger.exception("Failed to update master presence after chat menu close")
+
+                await message.answer(
+                    "🏠 <b>Повернення в меню майстра</b>",
+                    reply_markup=master_menu_kb(),
+                )
+                return
+
             await message.answer(
                 "🏠 <b>Повернення в меню</b>",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            await message.answer(
-                "Оберіть дію 👇",
                 reply_markup=main_menu_kb(is_admin_user=is_admin(message.from_user.id)),
             )
             return
