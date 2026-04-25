@@ -97,8 +97,8 @@ def client_actions_kb():
 def master_menu_kb():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row(KeyboardButton("🔔 Нові заявки"), KeyboardButton("📌 Мої роботи"))
-    kb.row(KeyboardButton("👤 Профіль"), KeyboardButton("✏️ Редагувати"))
-    kb.row(KeyboardButton("🏠 У меню"))
+    kb.row(KeyboardButton("⭐ Мої відгуки"), KeyboardButton("👤 Профіль"))
+    kb.row(KeyboardButton("✏️ Редагувати"), KeyboardButton("🏠 У меню"))
     return kb
 
 
@@ -267,6 +267,21 @@ def client_districts_inline_kb():
         )
 
     kb.add(InlineKeyboardButton("⬅️ Назад", callback_data="client_district_back"))
+    return kb
+
+
+def master_reviews_pagination_inline(page: int, has_prev: bool, has_next: bool):
+    kb = InlineKeyboardMarkup(row_width=2)
+    row = []
+
+    if has_prev:
+        row.append(InlineKeyboardButton("⬅️ Попередні", callback_data=f"master_reviews_page_{page - 1}"))
+    if has_next:
+        row.append(InlineKeyboardButton("Наступні ➡️", callback_data=f"master_reviews_page_{page + 1}"))
+
+    if row:
+        kb.add(*row)
+
     return kb
 
 
