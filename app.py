@@ -24,12 +24,13 @@ from aiogram.utils.exceptions import (
 
 import admin
 import admin_chat
-import order_reopen_notify_fix
+import chat_close_fix
 import client
 import common
 import master
 import misc
 import offers
+import order_reopen_notify_fix
 from config import settings
 from db import init_db
 from monitoring import stale_orders_watcher
@@ -54,8 +55,13 @@ def make_lock_key(token: str) -> int:
 def register_handlers(dp: Dispatcher) -> None:
     client.register(dp)
     master.register(dp)
-    admin_chat.register(dp)  # must be before order_reopen_notify_fix.register(dp)
-    offers.register(dp) to let admin intercept chat_history_ callbacks
+
+    # These handlers must be registered before offers.register(dp),
+    # because they intercept specific chat/refusal callbacks first.
+    admin_chat.register(dp)
+    chat_close_fix.register(dp)
+    order_reopen_notify_fix.register(dp)
+
     offers.register(dp)
     admin.register(dp)
     misc.register(dp)
