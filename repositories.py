@@ -1988,6 +1988,74 @@ async def get_public_master_profile(master_user_id: int):
     )
 
 
+async def get_master_reviews_page(master_user_id: int, page: int = 0, page_size: int = 5):
+    """
+    Paginated reviews for master profile.
+
+    Returns:
+    - master row with rating/reviews_count
+    - reviews page
+    - total reviews count
+    - normalized page
+    - page_size
+    """
+    page_size = max(1, min(int(page_size or 5), 10))
+    page = max(0, int(page or 0))
+    offset = page * page_size
+
+    master = await fetchrow(
+        """
+        SELECT user_id, name, rating, reviews_count
+        FROM masters
+        WHERE user_id=$1
+          AND status='approved'
+        """,
+        master_user_id,
+    )
+
+    total = await fetchval(
+        """
+        SELECT COUNT(*)
+        FROM orders
+        WHERE selected_master_id=$1
+          AND rating IS NOT NULL
+        """,
+        master_user_id,
+    )
+    total = int(total or 0)
+
+    if total > 0 and offset >= total:
+        page = max(0, (total - 1) // page_size)
+        offset = page * page_size
+
+    rows = await fetch(
+        """
+        SELECT
+            id AS order_id,
+            rating,
+            review_text,
+            updated_at,
+            created_at
+        FROM orders
+        WHERE selected_master_id=$1
+          AND rating IS NOT NULL
+        ORDER BY updated_at DESC, created_at DESC, id DESC
+        LIMIT $2 OFFSET $3
+        """,
+        master_user_id,
+        page_size,
+        offset,
+    )
+
+    return {
+        "master": master,
+        "reviews": rows,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
 async def get_master_recent_reviews(master_user_id: int, limit: int = 5):
     return await fetch(
         """
